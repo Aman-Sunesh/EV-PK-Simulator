@@ -1,7 +1,7 @@
 # EV-PK-Simulator
 
-A minimal Streamlit‐based tool for three‐compartment extracellular vesicle (EV) pharmacokinetic simulations.  
-Allows users to select injection route, visualize default concentration–time curves, and later fit custom data.
+A Streamlit‐based tool for extracellular vesicle (EV) pharmacokinetic simulations.  
+Allows users to select injection route, visualize default concentration–time curves, and fit custom data.
 
 ---
 

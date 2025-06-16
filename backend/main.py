@@ -1,6 +1,9 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from models import stub_one_compartment
 import pandas as pd
+from io import BytesIO
+
 
 app = FastAPI()
 
@@ -18,23 +21,32 @@ async def root():
 
 @app.post("/upload")
 async def upload_csv(file: UploadFile = File(...)):
-    # read into DataFrame
+    # 1) read into DataFrame
     try:
+        # read entire upload into memory
+        contents = await file.read()
+        buffer = BytesIO(contents)
+
         if file.filename.lower().endswith((".xls", ".xlsx")):
-            df = pd.read_excel(file.file)
+            df = pd.read_excel(buffer)
         else:
-            df = pd.read_csv(file.file)
+            # rewind buffer just in case
+            buffer.seek(0)
+            df = pd.read_csv(buffer)
+
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not parse file: {e}")
 
-    # normalize column names
+    # 2) normalize column names
     cols = {c.lower(): c for c in df.columns}
     df.rename(columns=cols, inplace=True)
 
+    # 3) check for required columns
     required = {"time", "concentration"}
     missing = required - set(df.columns)
     warnings = [f"Missing required column: {m}" for m in missing] if missing else []
 
+    # 4) build preview
     preview = df.head().to_dict(orient="records")
 
     return {"preview": preview, "warnings": warnings}

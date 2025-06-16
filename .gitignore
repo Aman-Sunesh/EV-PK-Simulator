@@ -7,3 +7,5 @@ backend/.venv/
 
 # SQLite file
 backend/ev_portal.db
+# Ignore all Node modules
+frontend/node_modules/

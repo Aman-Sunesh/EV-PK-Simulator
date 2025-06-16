@@ -1,0 +1,23 @@
+name: Python CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install pytest
+        run: pip install pytest
+      - name: Smoke test
+        run: |
+          echo "def test_smoke(): assert 1+1==2" > test_smoke.py
+          pytest --maxfail=1 --disable-warnings -q

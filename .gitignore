@@ -1,0 +1,9 @@
+# Python caches
+__pycache__/
+*.pyc
+
+# Virtualenv
+backend/.venv/
+
+# SQLite file
+backend/ev_portal.db

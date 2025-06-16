@@ -38,3 +38,13 @@ async def upload_csv(file: UploadFile = File(...)):
     preview = df.head().to_dict(orient="records")
 
     return {"preview": preview, "warnings": warnings}
+
+@app.post("/fit/one_compartment")
+async def fit_one(data: dict):
+    """
+    Expects JSON: {"time": [...], "concentration": [...]}
+    """
+    time = data.get("time", [])
+    conc = data.get("concentration", [])
+    params = stub_one_compartment(time, conc)
+    return params

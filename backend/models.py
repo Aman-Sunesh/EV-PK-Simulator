@@ -1,3 +1,4 @@
+import numpy as np
 from sqlalchemy import Column, Integer, String, LargeBinary, JSON
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -24,12 +25,3 @@ class PKModelResult(Base):
     upload_id = Column(Integer)
     model_type = Column(String)
     parameters = Column(JSON)
-
-
-
-def stub_one_compartment(time: list[float], conc: list[float]) -> dict:
-    """
-    Dummy 1-compartment PK fit.
-    Returns fixed values for Cl, Vd, t_half.
-    """
-    return {"Cl": 1.23, "Vd": 4.56, "t_half": 7.89}

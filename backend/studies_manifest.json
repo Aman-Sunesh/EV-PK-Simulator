@@ -1,0 +1,13 @@
+[
+  {
+    "id": "theoph",
+    "name": "Theophylline PK (Subjects 1-5)",
+    "source": "RDatasets",
+    "url": "https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Theoph.csv",
+    "defaultSpecies": "Mus musculus",
+    "dosingColumn": "Dose",
+    "subjectColumn": "Subject",
+    "timeColumn": "Time",
+    "concColumn": "conc"
+  }
+]

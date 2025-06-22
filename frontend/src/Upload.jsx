@@ -1,97 +1,181 @@
-import { useCallback, useState } from "react";
+// src/Upload.jsx
+import { useCallback, useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import axios from "axios";
 
 export default function Upload() {
-  const [preview, setPreview] = useState([]);
+  const [data, setData]     = useState([]);
+  const [rawData, setRawData] = useState([]); 
   const [warnings, setWarnings] = useState([]);
   const [fitParams, setFitParams] = useState(null);
+  const [dose, setDose] = useState(100.0);  // ← dose state
+  const [species, setSpecies] = useState("Mus musculus");
+  const [studies, setStudies]   = useState([]);
+  const [selectedStudy, setSelectedStudy] = useState("");
 
-  const onDrop = useCallback(async (files) => {
-    // Reset previous fit results
-    setFitParams(null);
+  // 1) Upload handler
+const onDrop = useCallback(async (files) => {
+  setFitParams(null);
+  const form = new FormData();
+  form.append("file", files[0]);
 
-    const data = new FormData();
-    data.append("file", files[0]);
-
-    try {
-      const res = await axios.post("http://localhost:8000/upload", data);
-      setPreview(res.data.preview);
-      setWarnings(res.data.warnings);
-    } catch (err) {
-      console.error(err);
-      alert("Upload failed: " + (err.response?.data?.detail || err.message));
-    }
-  }, []);
+  try {
+    const res = await axios.post("/upload", form);
+    setRawData(res.data.data);          // store full dataset
+    setData(res.data.data.slice(0,5));  // keep first 5 for preview
+    setWarnings(res.data.warnings);
+  } catch (err) {
+    console.error("Upload error detail:", err);
+    alert("Upload failed: " + (err.response?.data?.detail || err.message));
+  }
+}, []);
 
   const { getRootProps, getInputProps } = useDropzone({ onDrop });
 
+  // load manifest on mount
+  useEffect(() => {
+    axios.get("/studies")
+      .then(res => setStudies(res.data))
+      .catch(err => console.error("Failed to fetch studies", err));
+  }, []);
+
+  // handler when user picks an example study
+  const loadStudy = async id => {
+    setFitParams(null);
+    setSelectedStudy(id);
+    try {
+      const df = await axios.get(`/studies/${id}`);
+      setRawData(df.data);
+      setData(df.data.slice(0,5));
+      // derive defaults from first row
+      setSpecies(df.data[0].species || species);
+      setDose(df.data[0].dose || dose);
+      setWarnings([]);
+    } catch (err) {
+      alert("Failed to load study: " + id);
+    }
+  };
+
+  // 2) Fit button
+  const runFit = async () => {
+    if (!rawData.length) return alert("Upload first");
+    try {
+      const res = await axios.post("/fit/one_compartment", {
+      data: rawData,
+      dose
+    });
+      setFitParams(res.data.results);      // now an array of per‐subject fits
+    } catch (err) {
+      alert("Fit error: " + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  // 3) Report button
+  const downloadReport = async () => {
+    if (!rawData.length) return alert("Upload first");
+    const metadata = {
+      study_id: "UserStudy1",
+      species, 
+      route:    "IV bolus",
+      dose,         // use current dose
+    };
+    try {
+      const res = await axios.post(
+        "/report",
+        { data: rawData, metadata },
+        { responseType: "blob" }
+      );
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const url  = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "EVPK_Report.pdf";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      alert("Report error: " + err.message);
+    }
+  };
+
   return (
-    <div style={{ padding: 20 }}>
-      <div
-        {...getRootProps()}
-        style={{
-          border: "2px dashed #aaa",
-          padding: 40,
-          textAlign: "center",
-          cursor: "pointer",
-        }}
-      >
-        <input {...getInputProps()} />
-        <p>Drag & drop a CSV or Excel file here, or click to select</p>
+    <div className="container">
+
+      {/* New species input */}
+      <div className="input-row">
+        <label>
+          Load Example:&nbsp;
+          <select
+            value={selectedStudy}
+            onChange={e => loadStudy(e.target.value)}
+          >
+            <option value="">— select study —</option>
+            {studies.map(s => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      {!!warnings.length && (
-        <div style={{ color: "orange", marginTop: 10 }}>
-          {warnings.map((w, i) => (
-            <div key={i}>{w}</div>
-          ))}
+      <div className="input-row">
+        <label>
+          Species:&nbsp;
+          <input
+            type="text"
+            value={species}
+            onChange={e => setSpecies(e.target.value)}
+            placeholder="e.g. Mus musculus"
+            style={{ width: 200 }}
+          />
+        </label>
+      </div>
+
+      <div className="input-row">
+        <label>
+          Dose:&nbsp;
+          <input
+            type="number"
+            value={dose}
+            onChange={(e) => setDose(parseFloat(e.target.value))}
+            style={{ width: 80 }}
+          />&nbsp;mg
+        </label>
+      </div>
+
+      <div {...getRootProps()} className="dropzone">
+        <input {...getInputProps()} />
+        <p>Drag &amp; drop CSV/Excel here, or click to select</p>
+      </div>
+
+      {warnings.length > 0 && (
+        <div className="warnings">
+          {warnings.map((w, i) => <div key={i}>{w}</div>)}
         </div>
       )}
 
-      {preview.length > 0 && (
-        <div style={{ marginTop: 20 }}>
+      {data.length > 0 && (
+        <div className="preview-section">
           <h3>Data Preview</h3>
-          <pre style={{ background: "#f6f8fa", padding: 10 }}>
-            {JSON.stringify(preview, null, 2)}
-          </pre>
-
-          <button
-            onClick={async () => {
-              if (!preview.length) {
-                return alert("Upload data first");
-              }
-              // extract arrays
-              const time = preview.map((r) => r.time);
-              const concentration = preview.map((r) => r.concentration);
-              try {
-                const res = await axios.post(
-                  "http://localhost:8000/fit/one_compartment",
-                  { time, concentration }
-                );
-                setFitParams(res.data);
-              } catch (err) {
-                console.error(err);
-                alert("Fit error: " + (err.response?.data?.detail || err.message));
-              }
-            }}
-            style={{ marginTop: 20, padding: "8px 16px" }}
-          >
-            Fit 1-Compartment
-          </button>
+          <pre className="preview-json">{JSON.stringify(data, null, 2)}</pre>
+          <div className="buttons">
+            <button onClick={runFit}>Fit 1-Compartment</button>
+            <button onClick={downloadReport}>Download PDF Report</button>
+          </div>
         </div>
       )}
-
-      {fitParams && (
-        <div style={{ marginTop: 20 }}>
-          <h3>Fit Results</h3>
+      {Array.isArray(fitParams) && fitParams.map(r => (
+        <div key={r.subject} className="results">
+          <h4>Subject {r.subject}</h4>
           <ul>
-            <li>Cl: {fitParams.Cl}</li>
-            <li>Vd: {fitParams.Vd}</li>
-            <li>t₁/₂: {fitParams.t_half}</li>
+            <li>Vd = {r.fit.Vd.toFixed(3)}</li>
+            <li>kel = {r.fit.kel.toFixed(3)}</li>
+            <li>R² = {r.gof.R2.toFixed(3)}</li>
+            <li>AIC = {r.gof.AIC.toFixed(1)}</li>
           </ul>
         </div>
-      )}
+      ))}
     </div>
-  );
+);
 }

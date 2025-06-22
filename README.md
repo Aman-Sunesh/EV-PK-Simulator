@@ -112,43 +112,41 @@ ev-portal/
 
 ## Upcoming Tasks
 
-### Step 1: Basic ODE Solver Prototype
-- Implements a three‐compartment ODE system (blood ⇄ tissue → clearance) with hard‐coded rate constants (`k12=0.30, k21=0.10, kel=0.50`).
-- Plots C₁ (blood), C₂ (tissue), and C₃ (cleared) vs. time (0–24 h).
+- **Two-Compartment PK Model**  
+  Extend the fitting backend and UI to handle a central–peripheral compartment (V₁, V₂, k₁₂, k₂₁, kₑₗ).
 
-### Step 2: Route Selector + Initial Conditions
-- **Dropdown to choose injection route:**
-  - **Intravenous (IV):**
-    - `C1(0)=100, C2(0)=0, C3(0)=0`
-    - `(k12=0.30, k21=0.10, kel=0.50)`
-  - **Subcutaneous (SC):**
-    - `C4(0)=100` (depot), `C1(0)=0, C2(0)=0, C3(0)=0`
-    - `(k12=0.20, k21=0.08, kel=0.60, kab=0.15)`
-    - Implements a 4th ODE for depot → blood absorption at `kab`.
-  - **Intratumoral:**
-    - `C2(0)=100, C1(0)=0, C3(0)=0`
-    - `(k12=0.25, k21=0.07, kel=0.55)`
-- Automatically sets initial conditions and rate constants per route.
-- Plots blood, tissue, and clearance compartments; if SC, also shows depot decay.
+- **Injection-Route Explorer**  
+  Add route selection (IV bolus, IV infusion, SC, IM), simulate absorption kinetics (ka/Tinf) and plot C–time profiles.
 
+- **Modular PBPK Models**  
+  Define organ-level ODEs (liver, kidney, muscle, etc.), expose parameters in the backend and stub the UI for organ configuration.
 
-### Step 3: Data Upload & Curve Fitting
-- Add file uploader (CSV of concentration vs. time).
-- Perform least‐squares optimization to fit `(k12, k21, kel, kab)` to user data.
-- Overlay fitted curve vs. raw data.
+- **IVIVE Module**  
+  Scale in vitro clearance/permeability data to whole-body PK (CL, Vd), integrate input panels and include results in the PDF report.
 
-### Step 4: What‐If Analyses
-- Let users adjust rate constants manually.
-- Simulate multiple chassis types (e.g., exosome vs. liposome).
-- Compare different injection routes side‐by‐side.
+- **PK→PD Integration**  
+  Couple PK curves to a bacterial-kill PD model (Eₘₐₓ/EC₅₀), add dual-panel plotting and UI controls for PD parameters.
 
-### Step 5: Injection Site Recommendation Module
-- Based on target tissue concentration and desired clearance, suggest optimal route & dosing.
-- Simple rule‐based suggestions using default or fitted parameters.
+- **Dosing Regimen Builder**  
+  Interactive UI to assemble bolus/infusion/multiple‐dose schedules, simulate regimens, and compare exposure metrics.
 
-### Step 6: Documentation & Examples
-- Provide sample CSV datasets for tutorial.
-- Write usage guide with screenshots.
+- **Population Variability & Monte Carlo**  
+  Simulate virtual cohorts sampling PK/PD parameters from distributions and display percentile bands (e.g., 5th–95th).
+
+- **Deployment & Collaboration**  
+  Dockerize front-end and back-end, set up CI/CD, and enable shareable session links for team collaboration.
+
+- **Advanced Systems-Biology Plugins**  
+  Create a plugin framework for immune or signaling pathway ODE modules (e.g., NFκB), with drag-and-drop UI stubs.
+
+- **Real-Time Interactive Simulation**  
+  Port the ODE solver to WebAssembly or a background worker for instant parameter tweaking and live feedback.
+
+- **Data Export & FAIR Integration**  
+  One-click export to SBML/JSON-LD, embed DOIs, and link to ELN/LIMS for reproducible publishing.
+
+- **AI-Guided Modeling Assistant**  
+  Embed a natural-language chat interface to guide users through data upload, model choice, interpretation, and next-step suggestions.
 
 ---
 

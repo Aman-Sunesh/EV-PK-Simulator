@@ -152,8 +152,6 @@ ev-portal/
 
 ---
 
----
-
 ## Contributing
 
 1. Fork the repository  

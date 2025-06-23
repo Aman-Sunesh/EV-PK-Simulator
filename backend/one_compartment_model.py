@@ -198,8 +198,9 @@ def plot_fit(t: np.ndarray, C: np.ndarray, fit: dict, dose: float) -> BytesIO:
     """
     Generate two PNG plots and return as binary buffer
     """
-    buf = BytesIO()
     # linear plot
+    buf_lin = BytesIO()
+
     plt.figure()
     plt.scatter(t, C, label='Observed')
     t_line = np.linspace(t.min(), t.max(), 100)
@@ -208,10 +209,13 @@ def plot_fit(t: np.ndarray, C: np.ndarray, fit: dict, dose: float) -> BytesIO:
     plt.ylabel('Concentration')
     plt.legend()
     plt.title('One-Compartment Fit')
-    plt.savefig(buf, format='png')
+    plt.savefig(buf_lin, format='png')
     plt.close()
+    buf_lin.seek(0)
 
     # semilog plot
+    buf_log = BytesIO()
+
     plt.figure()
     plt.scatter(t, C, label='Observed')
     plt.plot(t_line, model_one_comp(t_line, fit['Vd'], fit['kel'], dose), 'r--', label='Fit')
@@ -220,7 +224,8 @@ def plot_fit(t: np.ndarray, C: np.ndarray, fit: dict, dose: float) -> BytesIO:
     plt.ylabel('Concentration (log)')
     plt.legend()
     plt.title('Semilog Plot')
-    plt.savefig(buf, format='png')
+    plt.savefig(buf_log, format='png')
     plt.close()
-    buf.seek(0)
-    return buf
+    buf_log.seek(0)
+    
+    return buf_lin, buf_log

@@ -16,7 +16,8 @@ def generate_pdf_report(
     fit: dict,
     pk_params: dict,
     gof: dict,
-    plot_buffer: BytesIO,
+    plot_buffer_lin: BytesIO,   
+    plot_buffer_log: BytesIO,  
     output_path: str
 ):
     """
@@ -104,12 +105,15 @@ def generate_pdf_report(
     elems.append(gof_tbl)
     elems.append(Spacer(1, 12))
 
-    # 7) Plot
-    elems.append(Paragraph("Concentration vs. Time", styles['Heading2']))
-    # We assume plot_buffer is a PNG containing both linear & semilog side by side,
-    # or you can split into two images and call Image() twice.
-    img = Image(plot_buffer, width=400, height=200)
-    elems.append(img)
+    # 7) Plots: linear then semilog
+    elems.append(Paragraph("Concentration vs. Time (Linear)", styles['Heading2']))
+    img_lin = Image(plot_buffer_lin, width=400, height=200)
+    elems.append(img_lin)
+    elems.append(Spacer(1, 12))
+
+    elems.append(Paragraph("Concentration vs. Time (Semilog)", styles['Heading2']))
+    img_log = Image(plot_buffer_log, width=400, height=200)
+    elems.append(img_log)
 
     # 8) Build PDF
     doc.build(elems)

@@ -24,6 +24,13 @@ from one_compartment_model import (
     plot_fit
 )
 
+from two_compartment_model import (
+    fit_two_compartment,
+    compute_pk_parameters_two,
+    compute_gof_two,
+    plot_fit_two
+)
+
 from reporting import generate_pdf_report
 
 app = FastAPI()
@@ -146,6 +153,32 @@ async def fit_one(payload: dict):
 
     return {"results": results}
 
+@app.post("/fit/two_compartment")
+async def fit_two(payload: dict):
+    df = pd.DataFrame(payload.get("data", []))
+    results = []
+    if "Subject" in df.columns:
+        groups = df.groupby("Subject")
+    else:
+        groups = [("All", df)]
+
+    for subj, grp in groups:
+        t      = grp["time"].values
+        C      = grp["concentration"].values
+        dose_i = float(grp["dose"].iloc[0]) if "dose" in grp.columns else float(payload.get("dose", 1.0))
+
+        fit       = fit_two_compartment(t, C, dose_i)
+        pk_params = compute_pk_parameters_two(fit, dose_i)
+        gof       = compute_gof_two(t, C, fit, dose_i)
+
+        results.append({
+            "subject":   subj,
+            "fit":       fit,
+            "pk_params": pk_params,
+            "gof":       gof
+        })
+    return {"results": results}
+
 @app.post("/report")
 async def create_report(payload: dict = Body(...)):
     """
@@ -163,7 +196,7 @@ async def create_report(payload: dict = Body(...)):
     # 2) Extract arrays & parameters
     t = df["time"].values
     C = df["concentration"].values
-    dose = float(payload["metadata"]["dose"])
+    model = payload["metadata"].get("model", "one")
 
     # 3) Build a multi-page PDF: one page per Subject (or "All" if no Subject)
     out_path = "/tmp/ev_pk_report.pdf"
@@ -188,11 +221,17 @@ async def create_report(payload: dict = Body(...)):
         else:
             dose_sub = float(payload["metadata"]["dose"])
 
-        # fit + PK + GOF + plot
-        fit       = fit_one_compartment(t_sub, C_sub, dose_sub)
-        pk_params = compute_pk_parameters(fit, dose_sub)
-        gof       = compute_gof(t_sub, C_sub, fit, dose_sub)
-        plot_buf  = plot_fit(t_sub, C_sub, fit, dose_sub)
+        # fit + PK + GOF + plot (branch by model)
+        if model == "two":
+            fit       = fit_two_compartment(t_sub, C_sub, dose_sub)
+            pk_params = compute_pk_parameters_two(fit, dose_sub)
+            gof       = compute_gof_two(t_sub, C_sub, fit)
+            buf_lin, buf_log = plot_fit_two(t_sub, C_sub, fit)
+        else:
+            fit       = fit_one_compartment(t_sub, C_sub, dose_sub)
+            pk_params = compute_pk_parameters(fit, dose_sub)
+            gof       = compute_gof(t_sub, C_sub, fit, dose_sub)
+            buf_lin, buf_log = plot_fit(t_sub, C_sub, fit, dose_sub)
 
         # Subject header
         elems.append(Paragraph(f"Subject {subj}", styles["Title"]))
@@ -247,9 +286,12 @@ async def create_report(payload: dict = Body(...)):
         elems.append(gof_tbl)
         elems.append(Spacer(1, 12))
 
-        # Plot
-        elems.append(Paragraph("Concentration vs. Time", styles["Heading2"]))
-        elems.append(Image(plot_buf, width=400, height=200))
+        # Plots: linear & semilog
+        elems.append(Paragraph("Linear Fit", styles["Heading2"]))
+        elems.append(Image(buf_lin, width=400, height=200))
+        elems.append(Spacer(1, 12))
+        elems.append(Paragraph("Semilog Fit", styles["Heading2"]))
+        elems.append(Image(buf_log, width=400, height=200))
 
         # page break
         elems.append(PageBreak())

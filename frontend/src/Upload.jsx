@@ -11,6 +11,7 @@ export default function Upload() {
   const [dose, setDose] = useState(100.0);  // ← dose state
   const [species, setSpecies] = useState("Mus musculus");
   const [studies, setStudies]   = useState([]);
+  const [selectedModel, setSelectedModel] = useState("");
   const [selectedStudy, setSelectedStudy] = useState("");
 
   // 1) Upload handler
@@ -60,10 +61,10 @@ const onDrop = useCallback(async (files) => {
   const runFit = async () => {
     if (!rawData.length) return alert("Upload first");
     try {
-      const res = await axios.post("/fit/one_compartment", {
-      data: rawData,
-      dose
-    });
+      const endpoint = selectedModel==="one"
+        ? "/fit/one_compartment"
+        : "/fit/two_compartment";
+      const res = await axios.post(endpoint, { data: rawData, dose });
       setFitParams(res.data.results);      // now an array of per‐subject fits
     } catch (err) {
       alert("Fit error: " + (err.response?.data?.detail || err.message));
@@ -76,8 +77,9 @@ const onDrop = useCallback(async (files) => {
     const metadata = {
       study_id: "UserStudy1",
       species, 
-      route:    "IV bolus",
+      route: "IV bolus",
       dose,         // use current dose
+      model: selectedModel,
     };
     try {
       const res = await axios.post(
@@ -98,84 +100,130 @@ const onDrop = useCallback(async (files) => {
     }
   };
 
-  return (
-    <div className="container">
 
-      {/* New species input */}
-      <div className="input-row">
-        <label>
-          Load Example:&nbsp;
-          <select
-            value={selectedStudy}
-            onChange={e => loadStudy(e.target.value)}
-          >
-            <option value="">— select study —</option>
-            {studies.map(s => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+   return (
+     <div className="container">
+       <h1>PB–PK Simulator</h1>
 
-      <div className="input-row">
-        <label>
-          Species:&nbsp;
-          <input
-            type="text"
-            value={species}
-            onChange={e => setSpecies(e.target.value)}
-            placeholder="e.g. Mus musculus"
-            style={{ width: 200 }}
-          />
-        </label>
-      </div>
+       {!selectedModel && (
+         <div className="model-select">
+           <button onClick={() => setSelectedModel("one")}>
+             One-Compartment Model
+           </button>
+           <button onClick={() => setSelectedModel("two")}>
+             Two-Compartment Model
+           </button>
+         </div>
+       )}
 
-      <div className="input-row">
-        <label>
-          Dose:&nbsp;
-          <input
-            type="number"
-            value={dose}
-            onChange={(e) => setDose(parseFloat(e.target.value))}
-            style={{ width: 80 }}
-          />&nbsp;mg
-        </label>
-      </div>
+      {selectedModel && (
+        <>
+          <h2>
+            {selectedModel === "one"
+              ? "One-Compartment Model"
+              : "Two-Compartment Model"}
+          </h2>
 
-      <div {...getRootProps()} className="dropzone">
-        <input {...getInputProps()} />
-        <p>Drag &amp; drop CSV/Excel here, or click to select</p>
-      </div>
+           {/* Species input */}
+           <div className="input-row">
+             <label>
+               Load Example:&nbsp;
+               <select
+                 value={selectedStudy}
+                 onChange={e => loadStudy(e.target.value)}
+               >
+                 <option value="">— select study —</option>
+                 {studies.map(s => (
+                   <option key={s.id} value={s.id}>
+                     {s.name}
+                   </option>
+                 ))}
+               </select>
+             </label>
+           </div>
 
-      {warnings.length > 0 && (
-        <div className="warnings">
-          {warnings.map((w, i) => <div key={i}>{w}</div>)}
-        </div>
+           <div className="input-row">
+             <label>
+               Species:&nbsp;
+               <input
+                 type="text"
+                 value={species}
+                 onChange={e => setSpecies(e.target.value)}
+                 placeholder="e.g. Mus musculus"
+                 style={{ width: 200 }}
+               />
+             </label>
+           </div>
+
+           <div className="input-row">
+             <label>
+               Dose:&nbsp;
+               <input
+                 type="number"
+                 value={dose}
+                 onChange={e => setDose(parseFloat(e.target.value))}
+                 style={{ width: 80 }}
+               />&nbsp;mg
+             </label>
+           </div>
+
+           {/* Dropzone */}
+           <div {...getRootProps()} className="dropzone">
+             <input {...getInputProps()} />
+             <p>Drag &amp; drop CSV/Excel here, or click to select</p>
+           </div>
+
+           {warnings.length > 0 && (
+             <div className="warnings">
+               {warnings.map((w,i) => <div key={i}>{w}</div>)}
+             </div>
+           )}
+
+           {/* Preview + Buttons */}
+           {data.length > 0 && (
+             <div className="preview-section">
+               <h3>Data Preview</h3>
+               <pre className="preview-json">
+                 {JSON.stringify(data, null, 2)}
+               </pre>
+               <div className="buttons">
+                 <button onClick={runFit}>
+                   {selectedModel === "one"
+                     ? "Fit One-Compartment"
+                     : "Fit Two-Compartment"}
+                 </button>
+                 <button onClick={downloadReport}>
+                   Download PDF Report
+                 </button>
+               </div>
+             </div>
+           )}
+
+           {/* Results */}
+           {Array.isArray(fitParams) && fitParams.map(r => (
+             <div key={r.subject} className="results">
+               <h4>Subject {r.subject}</h4>
+               <ul>
+                 {selectedModel === "one" ? (
+                   <>
+                     <li>Vd = {r.fit.Vd.toFixed(3)}</li>
+                     <li>kel = {r.fit.kel.toFixed(3)}</li>
+                   </>
+                 ) : (
+                   <>
+                     <li>A = {r.fit.A.toFixed(3)}</li>
+                     <li>α = {r.fit.alpha.toFixed(3)}</li>
+                     <li>B = {r.fit.B.toFixed(3)}</li>
+                     <li>β = {r.fit.beta.toFixed(3)}</li>
+                   </>
+                 )}
+                 <li>R² = {r.gof.R2.toFixed(3)}</li>
+                 <li>AIC = {r.gof.AIC.toFixed(1)}</li>
+               </ul>
+             </div>
+           ))}
+        </>
       )}
-
-      {data.length > 0 && (
-        <div className="preview-section">
-          <h3>Data Preview</h3>
-          <pre className="preview-json">{JSON.stringify(data, null, 2)}</pre>
-          <div className="buttons">
-            <button onClick={runFit}>Fit 1-Compartment</button>
-            <button onClick={downloadReport}>Download PDF Report</button>
-          </div>
-        </div>
-      )}
-      {Array.isArray(fitParams) && fitParams.map(r => (
-        <div key={r.subject} className="results">
-          <h4>Subject {r.subject}</h4>
-          <ul>
-            <li>Vd = {r.fit.Vd.toFixed(3)}</li>
-            <li>kel = {r.fit.kel.toFixed(3)}</li>
-            <li>R² = {r.gof.R2.toFixed(3)}</li>
-            <li>AIC = {r.gof.AIC.toFixed(1)}</li>
-          </ul>
-        </div>
-      ))}
-    </div>
-);
-}
+     </div>
+   );
+ }

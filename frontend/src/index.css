@@ -16,6 +16,14 @@ body {
   max-width: 800px;
   margin: 40px auto;
   padding: 0 20px;
+  text-align: center;
+}
+
+/* Style for the model‐select buttons on the main page */
+.model-select button {
+  margin: 20px;
+  padding: 20px 40px;
+  font-size: 1.25rem;
 }
 
 h1 {

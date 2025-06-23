@@ -71,10 +71,26 @@ h1 {
   background: #f6f8fa;
   padding: 10px;
   border-radius: 3px;
+  text-align: left; 
 }
 
 .buttons {
   margin-top: 15px;
+}
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+.preview-table th,
+.preview-table td {
+  border: 1px solid #ddd;
+  padding: 6px 8px;
+  text-align: left;
+}
+.preview-table th {
+  background: #f2f2f2;
 }
 
 button {
@@ -97,4 +113,5 @@ button:hover {
   background: #fff;
   padding: 20px;
   border-radius: 4px;
+  text-align: left;
 }

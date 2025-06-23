@@ -142,7 +142,7 @@ async def fit_one(payload: dict):
 
         fit    = fit_one_compartment(t, C, dose_i)
         pk     = compute_pk_parameters(fit, dose_i)
-        gof    = compute_gof(t, C, fit, dose_i)
+        gof    = compute_gof(t, C, fit)
 
         results.append({
             "subject":   subj,
@@ -167,9 +167,14 @@ async def fit_two(payload: dict):
         C      = grp["concentration"].values
         dose_i = float(grp["dose"].iloc[0]) if "dose" in grp.columns else float(payload.get("dose", 1.0))
 
-        fit       = fit_two_compartment(t, C, dose_i)
+        try:
+            fit = fit_two_compartment(t, C, dose_i)
+        except RuntimeError as e:
+            # turn into a clean HTTP 400
+            raise HTTPException(status_code=400, detail=str(e))
+        
         pk_params = compute_pk_parameters_two(fit, dose_i)
-        gof       = compute_gof_two(t, C, fit, dose_i)
+        gof       = compute_gof_two(t, C, fit)
 
         results.append({
             "subject":   subj,
@@ -223,22 +228,50 @@ async def create_report(payload: dict = Body(...)):
 
         # fit + PK + GOF + plot (branch by model)
         if model == "two":
-            fit       = fit_two_compartment(t_sub, C_sub, dose_sub)
-            pk_params = compute_pk_parameters_two(fit, dose_sub)
-            gof       = compute_gof_two(t_sub, C_sub, fit)
-            buf_lin, buf_log = plot_fit_two(t_sub, C_sub, fit)
+            fit         = fit_two_compartment(t_sub, C_sub, dose_sub)
+            pk_params   = compute_pk_parameters_two(fit, dose_sub)
+            gof         = compute_gof_two(t_sub, C_sub, fit)
+
+            # only draw mechanistic if all params are present
+            md = payload["metadata"]
+
+            # Apply defaults if user didn’t supply mechanistic parameters
+            k10 = float(md.get("k10", 0.1))
+            k12 = float(md.get("k12", 0.2))
+            k21 = float(md.get("k21", 0.05))
+            V1  = float(md.get("V1",  5.0))
+            V2  = float(md.get("V2", 20.0))
+
+            try:
+                buf_lin, buf_log, buf_mech = plot_fit_two(
+                    t_sub, C_sub, fit, k10, k12, k21, V1, V2)
+            except KeyError:
+                # missing mechanistic params → just total‐conc
+                buf_lin, buf_log = plot_fit_two(  # reuse two‐comp plot for total
+                    t_sub, C_sub, fit,
+                    k10, k12, k21, V1, V2
+                )[:2]
+                buf_mech = None
+
         else:
             fit       = fit_one_compartment(t_sub, C_sub, dose_sub)
             pk_params = compute_pk_parameters(fit, dose_sub)
-            gof       = compute_gof(t_sub, C_sub, fit, dose_sub)
+            gof       = compute_gof(t_sub, C_sub, fit)
             buf_lin, buf_log = plot_fit(t_sub, C_sub, fit, dose_sub)
 
         # Subject header
         elems.append(Paragraph(f"Subject {subj}", styles["Title"]))
         elems.append(Spacer(1, 12))
 
+        # Mechanistic central vs. peripheral
+        if model == "two" and buf_mech is not None:
+            elems.append(Paragraph("Central vs. Peripheral Compartments", styles["Heading2"]))
+            elems.append(Image(buf_mech, width=400, height=200))
+            elems.append(Spacer(1, 12))
+
         # Metadata table
-        meta = payload["metadata"].copy()
+        meta = {k: (v if isinstance(v,(str,int,float)) else json.dumps(v))
+        for k,v in payload["metadata"].items()}
         meta["subject"] = subj
         meta_data = [["Field", "Value"]] + [[k, str(v)] for k, v in meta.items()]
         tbl = Table(meta_data, hAlign="LEFT")
@@ -261,14 +294,34 @@ async def create_report(payload: dict = Body(...)):
         elems.append(sum_tbl)
         elems.append(Spacer(1, 12))
 
-        # Fit results
+        # Fit results (parameters & 95% CI)
         rows = [["Parameter","Estimate","95% CI"]]
-        for name in ("Vd","kel"):
-            est = fit[name]; ci = fit[f"{name}_ci"]
-            rows.append([name, f"{est:.3g}", f"[{ci[0]:.3g}, {ci[1]:.3g}]"])
-        for name in ("Cl","t_half","C0","AUC","MRT"):
-            est = pk_params[name]; ci = pk_params[f"{name}_ci"]
-            rows.append([name, f"{est:.3g}", f"[{ci[0]:.3g}, {ci[1]:.3g}]"])
+        if payload["metadata"].get("model","one") == "one":
+            # one-compartment parameters
+            for name in ("Vd","kel"):
+                est = fit[name]; ci = fit[f"{name}_ci"]
+                rows.append([name, f"{est:.3g}", f"[{ci[0]:.3g}, {ci[1]:.3g}]"])
+            # derived PK parameters
+            for name in ("Cl","t_half","C0","AUC","MRT"):
+                est = pk_params[name]; ci = pk_params[f"{name}_ci"]
+                rows.append([name, f"{est:.3g}", f"[{ci[0]:.3g}, {ci[1]:.3g}]"])
+        else:
+            # two-compartment macro parameters
+            for name in ("A","alpha","B","beta"):
+                est = fit[name]; ci = fit[f"{name}_ci"]
+                rows.append([name, f"{est:.3g}", f"[{ci[0]:.3g}, {ci[1]:.3g}]"])
+
+            # derived mechanistic parameters
+            md   = payload["metadata"]
+            k10  = float(md.get("k10", 0.0))
+            V1   = float(md.get("V1",  0.0))
+            V2   = float(md.get("V2",  0.0))
+            # steady-state volume and clearance
+            Vd_ss = V1 + V2
+            Cl    = k10 * V1
+            rows.append(["Vd_ss", f"{Vd_ss:.3g}", ""])
+            rows.append(["Cl",    f"{Cl:.3g}",    ""])
+
         fit_tbl = Table(rows, hAlign="LEFT")
         fit_tbl.setStyle(TableStyle([
             ("BACKGROUND", (0,0),(-1,0), colors.lightgrey),

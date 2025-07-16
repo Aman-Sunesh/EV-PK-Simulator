@@ -68,7 +68,16 @@ def fit_one_compartment(
         return model_one_comp(t, Vd, kel, dose)
 
     # perform fit 
-    popt, pcov = curve_fit(wrapper, t, C, p0=[Vd0, kel0])
+    popt, pcov = curve_fit(
+        wrapper,
+        t,
+        C,
+        p0=[Vd0, kel0],
+        bounds=([1e-6, 1e-6], [np.inf, np.inf]),
+        sigma=1/np.where(C>0, C**2, 1),
+        absolute_sigma=False,
+        maxfev=5000
+    )
 
     # extract fitted parameters & SEs
     Vd_fit, kel_fit = popt

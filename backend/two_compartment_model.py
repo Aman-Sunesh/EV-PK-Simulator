@@ -65,17 +65,30 @@ def fit_two_compartment(
         A0 = 0.7 * C0
         B0 = 0.3 * C0
 
-    def wrapper(t, A, alpha, B, beta):
-        return model_two_comp(t, A, alpha, B, beta)
+    # reparameterize so that alpha>beta: gamma,delta>0 with alpha=γ+δ, β=δ
+    def wrapper(t, A, B, gamma, delta):
+        alpha = gamma + delta
+        beta  = delta
+        return A * np.exp(-alpha * t) + B * np.exp(-beta  * t)
 
     try:
+        # derive γ0,δ0 from early/late log‐slopes
+        pos = C > 0
+        te, Ce = t[pos], np.log(C[pos])
+        se_early = -np.polyfit(te[:5],  Ce[:5],  1)[0]
+        se_late  = -np.polyfit(te[-5:], Ce[-5:], 1)[0]
+        gamma0   = max(1e-3, se_early - se_late)
+        delta0   = max(1e-3, se_late)
         popt, pcov = curve_fit(
-            wrapper, 
-            t, 
-            C, 
-            p0=[A0, alpha0, B0, beta0],
-            bounds=(0, np.inf), # enforce non‐negative parameters
-            maxfev=5000 # bump up max evaluations
+            wrapper,
+            t,
+            C,
+            p0=[A0, B0, gamma0, delta0],
+            bounds=([0,   0,      0,      0],
+                    [np.inf,np.inf,np.inf,np.inf]),
+            sigma=1/np.where(C>0, C**2, 1),
+            absolute_sigma=False,
+            maxfev=10000
         )
     except RuntimeError as e:
         # re‐raise with more context
@@ -83,22 +96,33 @@ def fit_two_compartment(
             f"Two‐compartment fit failed to converge after 5000 calls: {e}"
         )
 
-    A_fit, alpha_fit, B_fit, beta_fit = popt
-    se = np.sqrt(np.diag(pcov))  # [SE(A), SE(alpha), SE(B), SE(beta)]
+    A_fit, B_fit, gamma_fit, delta_fit = popt
+    alpha_fit = gamma_fit + delta_fit
+    beta_fit  = delta_fit
+
+    # standard errors: A, B, γ, δ
+    se_params = np.sqrt(np.diag(pcov))
+    se_A, se_B, se_gamma, se_delta = se_params
+
+    # SE for alpha = γ+δ
+    se_alpha = np.sqrt(pcov[2,2] + pcov[3,3] + 2*pcov[2,3])
+
+    # CI for alpha
+    z = 1.96
+    alpha_ci = (alpha_fit - z*se_alpha, alpha_fit + z*se_alpha)
+    beta_ci  = (beta_fit  - z*se_delta, beta_fit  + z*se_delta)
 
     # 95% CIs
     z = 1.96
-    A_ci     = (A_fit     - z*se[0], A_fit     + z*se[0])
-    alpha_ci = (alpha_fit - z*se[1], alpha_fit + z*se[1])
-    B_ci     = (B_fit     - z*se[2], B_fit     + z*se[2])
-    beta_ci  = (beta_fit  - z*se[3], beta_fit  + z*se[3])
+    A_ci     = (A_fit     - z*se_A,     A_fit     + z*se_A)
+    B_ci     = (B_fit     - z*se_B,     B_fit     + z*se_B)
 
     return {
-        'A': A_fit, 'A_se': se[0], 'A_ci': A_ci,
-        'alpha': alpha_fit, 'alpha_se': se[1], 'alpha_ci': alpha_ci,
-        'B': B_fit, 'B_se': se[2], 'B_ci': B_ci,
-        'beta': beta_fit, 'beta_se': se[3], 'beta_ci': beta_ci,
-        'pcov': pcov.tolist()
+        'A':     A_fit,       'A_se':     se_A,      'A_ci':     A_ci,
+        'B':     B_fit,       'B_se':     se_B,      'B_ci':     B_ci,
+        'alpha': alpha_fit,   'alpha_se': se_alpha,  'alpha_ci': alpha_ci,
+        'beta':  beta_fit,    'beta_se':  se_delta,  'beta_ci':  beta_ci,
+        'pcov':  pcov.tolist()
     }
 
 # =============================================================================

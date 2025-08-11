@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 
 # Virtualenv
-backend/.venv/
+.venv/
 
 # SQLite file
 backend/ev_portal.db

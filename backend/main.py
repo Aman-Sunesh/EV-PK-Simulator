@@ -32,6 +32,7 @@ from two_compartment_model import (
 )
 
 from reporting import generate_pdf_report
+from pk_routes_one_comp import simulate_one_comp_route
 
 app = FastAPI()
 
@@ -142,7 +143,7 @@ async def fit_one(payload: dict):
 
         fit    = fit_one_compartment(t, C, dose_i)
         pk     = compute_pk_parameters(fit, dose_i)
-        gof    = compute_gof(t, C, fit)
+        gof    = compute_gof(t, C, fit, dose_i)
 
         results.append({
             "subject":   subj,
@@ -356,3 +357,53 @@ async def create_report(payload: dict = Body(...)):
         media_type="application/pdf",
         filename="EVPK_Report.pdf"
     )
+
++@app.post("/simulate_pk")
++async def simulate_pk(payload: dict = Body(...)):
+    """
+    One-compartment simulation for multiple dosing routes.
+    Body:
+    {
+      "model": "1c",
+      "route": "iv_bolus" | "iv_infusion" | "oral" | "sc",
+      "params": {
+        "Vd": float,
+        "kel": float,
+        "F": float?,       // oral/sc
+        "ka": float?,      // oral/sc
+        "Tinf": float?     // infusion default if not per-dose
+      },
+      // EITHER an explicit dose schedule...
+      "dosing": [ { "time": float, "dose": float, "Tinf": float? }, ... ],
+      // ...OR a simple repeat rule to generate dosing on the backend
+      "repeat": { "start": 0.0, "tau": 8.0, "count": 10, "dose": 100.0, "Tinf": 1.0? },
+      // time grid
+      "t_end": 24.0,
+      "dt": 0.1
+    }
+    Returns:
+      { "time": [...], "conc": [...], "summary": { Cmax, Tmax, AUC, (optional) Cmax_ss, Cmin_ss } }
+    """
+    model = payload.get("model", "1c")
+    if model != "1c":
+        raise HTTPException(status_code=400, detail="Only '1c' model supported in /simulate_pk for now.")
+    route  = payload.get("route", "iv_bolus")
+    params = payload.get("params", {})
+    dosing = payload.get("dosing", None)
+    repeat = payload.get("repeat", None)
+    t_end  = float(payload.get("t_end", 24.0))
+    dt     = float(payload.get("dt", 0.1))
+
+    try:
+        result = simulate_one_comp_route(
+            route=route,
+            params=params,
+            dosing=dosing,
+            repeat=repeat,
+            t_end=t_end,
+            dt=dt
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return result

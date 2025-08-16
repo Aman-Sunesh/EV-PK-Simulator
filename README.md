@@ -118,9 +118,6 @@ ev-portal/
 - **Injection-Route Explorer**  
   Add route selection (IV bolus, IV infusion, SC, IM), simulate absorption kinetics (ka/Tinf) and plot C–time profiles.
 
-- **Modular PBPK Models**  
-  Define organ-level ODEs (liver, kidney, muscle, etc.), expose parameters in the backend and stub the UI for organ configuration.
-
 - **IVIVE Module**  
   Scale in vitro clearance/permeability data to whole-body PK (CL, Vd), integrate input panels and include results in the PDF report.
 
@@ -130,23 +127,11 @@ ev-portal/
 - **Dosing Regimen Builder**  
   Interactive UI to assemble bolus/infusion/multiple‐dose schedules, simulate regimens, and compare exposure metrics.
 
-- **Population Variability & Monte Carlo**  
-  Simulate virtual cohorts sampling PK/PD parameters from distributions and display percentile bands (e.g., 5th–95th).
-
 - **Deployment & Collaboration**  
   Dockerize front-end and back-end, set up CI/CD, and enable shareable session links for team collaboration.
 
-- **Advanced Systems-Biology Plugins**  
-  Create a plugin framework for immune or signaling pathway ODE modules (e.g., NFκB), with drag-and-drop UI stubs.
-
-- **Real-Time Interactive Simulation**  
-  Port the ODE solver to WebAssembly or a background worker for instant parameter tweaking and live feedback.
-
 - **Data Export & FAIR Integration**  
   One-click export to SBML/JSON-LD, embed DOIs, and link to ELN/LIMS for reproducible publishing.
-
-- **AI-Guided Modeling Assistant**  
-  Embed a natural-language chat interface to guide users through data upload, model choice, interpretation, and next-step suggestions.
 
 ---
 

@@ -16,6 +16,10 @@ def _validate_positive(name: str, val: float):
     if val is None or val <= 0:
         raise ValueError(f"'{name}' must be > 0")
 
+def _validate_nonnegative(name: str, val: float):
+    if val is None or val < 0:
+        raise ValueError(f"'{name}' must be ≥ 0")
+
 # Core equations (one compartment) 
 def _iv_bolus_curve(t: np.ndarray, Vd: float, kel: float,
                     doses: List[Dict]) -> np.ndarray:
@@ -56,7 +60,7 @@ def _iv_infusion_curve(t: np.ndarray, Vd: float, kel: float,
 
 def _extravascular_curve(t: np.ndarray, Vd: float, kel: float,
                          doses: List[Dict], F: float, ka: float) -> np.ndarray:
-    _validate_positive("F", F)
+    _validate_nonnegative("F", F)
     _validate_positive("ka", ka)
     C = np.zeros_like(t, dtype=float)
     same = np.isclose(ka, kel)
@@ -91,6 +95,12 @@ def simulate_one_comp_route(
     t_end: float,
     dt: float
 ) -> Dict:
+    # basic grid checks
+    if dt <= 0:
+        raise ValueError("'dt' must be > 0")
+    if t_end < 0:
+        raise ValueError("'t_end' must be ≥ 0")
+
     # validate core params
     Vd  = float(params.get("Vd", 0.0))
     kel = float(params.get("kel", 0.0))
@@ -163,11 +173,19 @@ def simulate_one_comp_route(
                 D    = float(repeat.get("dose", 0.0))
                 CL   = kel * Vd
                 _validate_positive("Tinf", Tinf)
-                K0   = D / Tinf
-                cmax_ss = (K0 / CL) * _expm1_pos(kel * Tinf) / (1.0 - np.exp(-kel * tau))
-                cmin_ss = cmax_ss * np.exp(-kel * (tau - Tinf))
-                extras["Cmax_ss"] = float(cmax_ss)
-                extras["Cmin_ss"] = float(cmin_ss)
+
+                if tau < Tinf:
+                    extras["warning"] = (
+                        "tau < Tinf → overlapping infusions: steady-state Cmax/Cmin "
+                        "formulas are not applicable; omitted."
+                    )
+                else:
+                    K0   = D / Tinf
+                    cmax_ss = (K0 / CL) * _expm1_pos(kel * Tinf) / (1.0 - np.exp(-kel * tau))
+                    cmin_ss = cmax_ss * np.exp(-kel * (tau - Tinf))
+                    extras["Cmax_ss"] = float(cmax_ss)
+                    extras["Cmin_ss"] = float(cmin_ss)
+                    
             elif route in ("oral", "sc"):
                 # Average Css = (F*D)/(CL * tau), but peaks/troughs depend on ka.
                 D  = float(repeat.get("dose", 0.0))

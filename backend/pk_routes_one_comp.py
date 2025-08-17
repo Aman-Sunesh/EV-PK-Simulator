@@ -20,6 +20,33 @@ def _validate_nonnegative(name: str, val: float):
     if val is None or val < 0:
         raise ValueError(f"'{name}' must be ≥ 0")
 
+def _expand_extravascular_continuous(
+    dosing: List[Dict],
+    dt: float,
+    max_pulses: int = 2000
+) -> List[Dict]:
+    """
+    For oral/sc events that include Tinf (an 'on' window), split the total dose
+    evenly into many small boluses across the window to approximate continuous input.
+    """
+    out: List[Dict] = []
+    for ev in dosing or []:
+        Tinf = float(ev.get("Tinf") or 0.0)
+        if Tinf > 0:
+            D = float(ev["dose"])
+            n = int(np.ceil(Tinf / max(dt, 1e-12)))
+            n = max(1, min(max_pulses, n))
+            delta = Tinf / n
+            d_micro = D / n
+            t0 = float(ev["time"])
+            for j in range(n):
+                out.append({"time": t0 + j*delta, "dose": d_micro})
+        else:
+            # no window → single bolus
+            ev2 = dict(ev); ev2.pop("Tinf", None)  # tidy
+            out.append(ev2)
+    return out
+
 # Core equations (one compartment) 
 def _iv_bolus_curve(t: np.ndarray, Vd: float, kel: float,
                     doses: List[Dict]) -> np.ndarray:
@@ -101,6 +128,8 @@ def simulate_one_comp_route(
     if t_end < 0:
         raise ValueError("'t_end' must be ≥ 0")
 
+    route = route.lower()
+
     # validate core params
     Vd  = float(params.get("Vd", 0.0))
     kel = float(params.get("kel", 0.0))
@@ -118,21 +147,25 @@ def simulate_one_comp_route(
         dose0 = float(repeat.get("dose", 0.0))
         _validate_positive("tau", tau)
         _validate_positive("dose", dose0)
+        _validate_positive("count", count)
         dosing = []
 
         for i in range(count):
             entry = {"time": start + i * tau, "dose": dose0}
-            if route == "iv_infusion":
+            if route in ("iv_infusion", "oral", "sc"):
                 Tinf = float(repeat.get("Tinf", params.get("Tinf", 0.0)))
-                _validate_positive("Tinf", Tinf)
-                entry["Tinf"] = Tinf
+                if Tinf > 0:
+                    _validate_positive("Tinf", Tinf)
+                    entry["Tinf"] = Tinf
             dosing.append(entry)
 
     if not dosing:
         raise ValueError("Provide 'dosing' list or 'repeat' rule.")
 
-    # run route
-    route = route.lower()
+    # If extravascular, expand any Tinf windows into micro-boluses
+    if route in ("oral", "sc"):
+        dosing = _expand_extravascular_continuous(dosing, dt)
+
     if route == "iv_bolus":
         C = _iv_bolus_curve(t, Vd, kel, dosing)
 

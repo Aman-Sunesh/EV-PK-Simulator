@@ -108,6 +108,11 @@ button:hover {
   background-color: #0056b3;
 }
 
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .results {
   margin-top: 20px;
   background: #fff;
@@ -135,4 +140,15 @@ button:hover {
   border: 1px solid #e1e7ff;
   padding: 6px 10px;
   border-radius: 6px;
+}
+
+.error-list {
+  margin-top: 8px;
+  color: #a52828;
+  background: #fde8e8;
+  border: 1px solid #f5c2c2;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  text-align: left;
 }

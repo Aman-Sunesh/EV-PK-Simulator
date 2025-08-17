@@ -4,6 +4,8 @@ from scipy.optimize import curve_fit
 from sklearn.metrics import r2_score
 import matplotlib.pyplot as plt
 from io import BytesIO
+from typing import List, Dict, Optional, Tuple
+from matplotlib.patches import Rectangle
 
 # =============================================================================
 # 1. Pre-fit QC & Preprocessing
@@ -15,7 +17,7 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     - Warn on non-positive values
     """
     # normalize column names
-    df = df.rename(columns={c.lower(): c for c in df.columns})
+    df = df.rename(columns={c: c.lower() for c in df.columns})
 
     # required keys
     if 'time' not in df or 'concentration' not in df:
@@ -86,7 +88,7 @@ def fit_one_compartment(
         'kel': kel_fit,
         'kel_se': se[1],
         'kel_ci': kel_ci,
-        'pcov': pcov
+        'pcov': pcov.tolist()
     }
 
 # =============================================================================
@@ -100,9 +102,9 @@ def compute_pk_parameters(fit: dict, dose: float) -> dict:
 
     Vd = fit['Vd']
     kel = fit['kel']
-    pcov = fit['pcov']   # 2×2 covariance: [[varVd, covVdKel], [covVdKel, varKel]]
-    varVd, varKel = pcov[0,0], pcov[1,1]
-    covVdKel  = pcov[0,1]
+    pcov = np.asarray(fit['pcov'], dtype=float)  # shape (2,2): [[varVd, cov], [cov, varKel]]
+    varVd, varKel = pcov[0, 0], pcov[1, 1]
+    covVdKel      = pcov[0, 1]
 
     # point estimates
     Cl = kel * Vd
@@ -194,9 +196,21 @@ def compute_gof(t: np.ndarray, C: np.ndarray, fit: dict, dose: float) -> dict:
 # =============================================================================
 # 6. Visualization: linear & semilog plots
 # =============================================================================
-def plot_fit(t: np.ndarray, C: np.ndarray, fit: dict, dose: float) -> BytesIO:
+def plot_fit(
+    t: np.ndarray,
+    C: np.ndarray,
+    fit: dict,
+    dose: float,
+    dosing: Optional[List[Dict]] = None
+) -> Tuple[BytesIO, BytesIO, BytesIO]:
     """
-    Generate two PNG plots and return as binary buffer
+    Generate three PNG plots and return as binary buffers:
+      • Linear concentration–time plot
+      • Semilog (log-Y) concentration–time plot
+      • Dosing timeline strip (bolus stems, infusion windows)
+
+    Returns:
+      (buf_lin: BytesIO, buf_log: BytesIO, buf_dose: BytesIO)
     """
     # linear plot
     buf_lin = BytesIO()
@@ -228,4 +242,42 @@ def plot_fit(t: np.ndarray, C: np.ndarray, fit: dict, dose: float) -> BytesIO:
     plt.close()
     buf_log.seek(0)
     
-    return buf_lin, buf_log
+    # dosing timeline 
+    buf_dose = BytesIO()
+    plt.figure()
+    ax = plt.gca()
+    tmin, tmax = float(np.min(t)), float(np.max(t))
+    ax.set_xlim(tmin, tmax)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_xlabel('Time')
+    ax.set_title('Dosing Timeline')
+
+    # Default: single bolus at t=0 if nothing provided
+    events = dosing if dosing else [{"time": 0.0, "dose": dose}]
+    has_bolus = False
+    has_inf   = False
+    for ev in events:
+        ti = float(ev.get("time", 0.0))
+        if "Tinf" in ev and ev["Tinf"] is not None and ev["Tinf"] > 0:
+            width = float(ev["Tinf"])
+            ax.add_patch(Rectangle((ti, 0.15), width, 0.7, alpha=0.3))
+            has_inf = True
+        else:
+            ax.vlines(ti, 0.1, 0.9)
+            has_bolus = True
+
+    # simple legend
+    labels = []
+    if has_bolus: labels.append("bolus")
+    if has_inf:   labels.append("infusion")
+    if labels:
+        ax.text(0.99, 0.85, " + ".join(labels), transform=ax.transAxes,
+                ha="right", va="center", fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig(buf_dose, format='png')
+    plt.close()
+    buf_dose.seek(0)
+
+    return buf_lin, buf_log, buf_dose

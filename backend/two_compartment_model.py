@@ -6,6 +6,8 @@ from scipy.integrate import solve_ivp
 from typing import Tuple
 import matplotlib.pyplot as plt
 from io import BytesIO
+from typing import Tuple, List, Dict, Optional
+from matplotlib.patches import Rectangle
 
 # =============================================================================
 # 1. Pre-fit QC & Preprocessing 
@@ -17,7 +19,7 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     - Sort by time, drop duplicates
     - Warn on non-positive values
     """
-    df = df.rename(columns={c.lower(): c for c in df.columns})
+    df = df.rename(columns={c: c.lower() for c in df.columns})
 
     if 'time' not in df or 'concentration' not in df:
         raise ValueError("Missing 'time' or 'concentration' column.")
@@ -166,9 +168,14 @@ def compute_gof_two(
 # =============================================================================
 # 6. Visualization: linear & semilog plots
 # =============================================================================
-def plot_fit_two(t: np.ndarray, C: np.ndarray, fit: dict,
-                k10: float, k12: float, k21: float,
-                V1: float, V2: float) -> Tuple[BytesIO, BytesIO, BytesIO]:
+def plot_fit_two(
+    t: np.ndarray,
+    C: np.ndarray,
+    fit: dict,
+    k10: float, k12: float, k21: float,
+    V1: float, V2: float,
+    dosing: Optional[List[Dict]] = None
+) -> Tuple[BytesIO, BytesIO, BytesIO, BytesIO]:
     """
     Returns (buf_lin, buf_log) PNG buffers, each overlaid with:
       • total concentration  C_total(t) = A e^{-αt} + B e^{-βt}
@@ -242,4 +249,41 @@ def plot_fit_two(t: np.ndarray, C: np.ndarray, fit: dict,
     plt.close()
     buf_mech.seek(0)
 
-    return buf_lin, buf_log, buf_mech
+    # 4) Dosing timeline
+    buf_dose = BytesIO()
+    plt.figure()
+    ax = plt.gca()
+    tmin, tmax = float(np.min(t)), float(np.max(t))
+    ax.set_xlim(tmin, tmax)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_xlabel('Time')
+    ax.set_title('Dosing Timeline')
+
+    events = dosing if dosing else [{"time": 0.0, "dose": (fit['A']+fit['B'])*V1}]
+    has_bolus = False
+    has_inf   = False
+
+    for ev in events:
+        ti = float(ev.get("time", 0.0))
+        if "Tinf" in ev and ev["Tinf"] is not None and ev["Tinf"] > 0:
+            width = float(ev["Tinf"])
+            ax.add_patch(Rectangle((ti, 0.15), width, 0.7, alpha=0.3))
+            has_inf = True
+        else:
+            ax.vlines(ti, 0.1, 0.9)
+            has_bolus = True
+            
+    labels = []
+    if has_bolus: labels.append("bolus")
+    if has_inf:   labels.append("infusion")
+    if labels:
+        ax.text(0.99, 0.85, " + ".join(labels), transform=ax.transAxes,
+                ha="right", va="center", fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig(buf_dose, format='png')
+    plt.close()
+    buf_dose.seek(0)
+
+    return buf_lin, buf_log, buf_mech, buf_dose

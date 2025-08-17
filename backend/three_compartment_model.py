@@ -211,19 +211,59 @@ def compute_pk_parameters_three(fit: dict, dose: float) -> dict:
 # =============================================================================
 def compute_gof_three(t: np.ndarray, C: np.ndarray, fit: dict) -> dict:
     eps = 1e-9
+    t = np.asarray(t, float)
     C_pred = model_three_comp(
         np.asarray(t, float),
         fit['A'], fit['alpha'], fit['B'], fit['beta'], fit['C'], fit['gamma']
     )
     y = np.log(np.clip(C, eps, None))
     yhat = np.log(np.clip(C_pred, eps, None))
-    ss_res = np.sum((y - yhat)**2)
-    ss_tot = np.sum((y - np.mean(y))**2)
+
+    ss_res = float(np.sum((y - yhat)**2))
+    ss_tot = float(np.sum((y - np.mean(y))**2))
     r2_log = 1.0 - ss_res/ss_tot if ss_tot > 0 else np.nan
+
     n = y.size; k = 6
     sigma2 = ss_res / max(n,1)
-    AIC = n*np.log(max(sigma2, 1e-300)) + 2*k
-    return {'R2': float(r2_log), 'resid_mean': float(np.mean(y-yhat)), 'resid_std': float(np.std(y-yhat)), 'AIC': float(AIC)}
+    AIC  = n*np.log(max(sigma2, 1e-300)) + 2*k
+    AICc = AIC + (2*k*(k+1))/(max(n - k - 1, 1)) if n > (k + 1) else float('nan')
+
+    # separation (linear + log space) and tail AUC contribution
+    A = float(fit['A']); alpha = float(fit['alpha'])
+    B = float(fit['B']); beta  = float(fit['beta'])
+    Cc = float(fit['C']); gamma = float(fit['gamma'])
+    rates = np.array([alpha, beta, gamma], float)
+    rmax = float(np.max(rates)) if np.all(np.isfinite(rates)) else np.nan
+    diffs = [abs(rates[i]-rates[j]) for i in range(3) for j in range(i+1,3)]
+    sep_abs = float(np.min(diffs)) if diffs else 0.0
+    sep_rel = (sep_abs / rmax) if (rmax and rmax > 0) else 0.0
+    # log-space separation (scale-invariant)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_r = np.log(rates)
+        diffs_log = [abs(log_r[i]-log_r[j]) for i in range(3) for j in range(i+1,3) if np.isfinite(log_r[i]+log_r[j])]
+
+    sep_log = float(np.min(diffs_log)) if len(diffs_log) else float('nan')
+
+    # tail AUC fraction (how much the slowest exponential contributes)
+    auc_parts = np.array([A/alpha if alpha>0 else 0.0,
+                          B/beta  if beta >0 else 0.0,
+                          Cc/gamma if gamma>0 else 0.0], float)
+    
+    total_auc = float(np.sum(auc_parts))
+    tail_auc_frac = float(auc_parts[2]/total_auc) if (np.isfinite(total_auc) and total_auc>0) else float('nan')
+
+
+    return {
+        'R2': float(r2_log),
+        'resid_mean': float(np.mean(y-yhat)),
+        'resid_std': float(np.std(y-yhat)),
+        'AIC': float(AIC),
+        'AICc': float(AICc),
+        'rate_sep_abs': sep_abs,
+        'rate_sep_rel': sep_rel,
+        'rate_sep_log': sep_log,
+        'tail_auc_frac': tail_auc_frac
+    }
 
 # =============================================================================
 # 6. Visualization (total fit; mechanistic with micro constants if provided)

@@ -65,7 +65,16 @@ def _get_macros(params: Dict) -> Tuple[float, float, float, float, float, float]
             _validate_positive(n, v)
         for n, v in (("A", A), ("B", B), ("C", C)):
             _validate_nonnegative(n, v)
-        # require separation to avoid degeneracy
+
+        # enforce ordering α ≥ β ≥ γ and permute (A,B,C) accordingly
+        rates = np.array([alpha, beta, gamma], float)
+        coefs = np.array([A, B, C], float)
+        order = np.argsort(rates)[::-1]  # descending
+        rates = rates[order]; coefs = coefs[order]
+        alpha, beta, gamma = float(rates[0]), float(rates[1]), float(rates[2])
+        A, B, C = float(coefs[0]), float(coefs[1]), float(coefs[2])
+
+        # require modest separation to avoid near-degeneracy
         if min(abs(alpha-beta), abs(alpha-gamma), abs(beta-gamma)) < 1e-6*max(alpha, beta, gamma):
             raise ValueError("Macro rates too close; need distinct exponentials.")
         return A, alpha, B, beta, C, gamma
@@ -252,13 +261,14 @@ def simulate_three_comp_route(
                 # Cmax_ss = D * ( A/(1-e^{-ατ}) + B/(1-e^{-βτ}) + C/(1-e^{-γτ}) )
                 # Cmin_ss = Cmax_ss * exp(-rates*τ) componentwise and summed
                 D = float(repeat.get("dose", 0.0))
-                one_ma = 1.0 - np.exp(-alpha*tau)
-                one_mb = 1.0 - np.exp(-beta *tau)
-                one_mg = 1.0 - np.exp(-gamma*tau)
+                eps = 1e-12
+                one_ma = np.maximum(1.0 - np.exp(-alpha*tau), eps)
+                one_mb = np.maximum(1.0 - np.exp(-beta *tau), eps)
+                one_mg = np.maximum(1.0 - np.exp(-gamma*tau), eps)
                 cmax_ss = D * ( A/one_ma + B/one_mb + C/one_mg )
                 cmin_ss = D * ( A*np.exp(-alpha*tau)/one_ma
-                               + B*np.exp(-beta *tau)/one_mb
-                               + C*np.exp(-gamma*tau)/one_mg )
+                            + B*np.exp(-beta *tau)/one_mb
+                            + C*np.exp(-gamma*tau)/one_mg )
                 extras["Cmax_ss"] = float(cmax_ss)
                 extras["Cmin_ss"] = float(cmin_ss)
 
@@ -274,12 +284,13 @@ def simulate_three_comp_route(
                 else:
                     D  = float(repeat.get("dose", 0.0))
                     K0 = D / Tinf
-                    one_ma = 1.0 - np.exp(-alpha*tau)
-                    one_mb = 1.0 - np.exp(-beta *tau)
-                    one_mg = 1.0 - np.exp(-gamma*tau)
-                    Aend = (A/alpha) * _expm1_pos(alpha*Tinf)
-                    Bend = (B/beta)  * _expm1_pos(beta *Tinf)
-                    Cend = (C/gamma) * _expm1_pos(gamma*Tinf)
+                    eps = 1e-12
+                    one_ma = np.maximum(1.0 - np.exp(-alpha*tau), eps)
+                    one_mb = np.maximum(1.0 - np.exp(-beta *tau),  eps)
+                    one_mg = np.maximum(1.0 - np.exp(-gamma*tau), eps)
+                    Aend = (A/max(alpha, eps)) * _expm1_pos(alpha*Tinf)
+                    Bend = (B/max(beta,  eps)) * _expm1_pos(beta *Tinf)
+                    Cend = (C/max(gamma, eps)) * _expm1_pos(gamma*Tinf)
                     cmax_ss = K0 * ( Aend/one_ma + Bend/one_mb + Cend/one_mg )
                     cmin_ss = K0 * (
                         Aend*np.exp(-alpha*(tau - Tinf))/one_ma

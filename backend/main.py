@@ -235,24 +235,63 @@ async def fit_three(payload: dict):
     subj_col = "Subject" if "Subject" in df.columns else ("subject" if "subject" in df.columns else None)
     results = []
     groups = df.groupby(subj_col) if subj_col else [("All", df)]
+
     for subj, grp in groups:
         t = grp["time"].values
         C = grp["concentration"].values
         dose_i = float(grp["dose"].iloc[0]) if "dose" in grp.columns else float(payload.get("dose", 1.0))
+        n = len(t)
 
+        # try 3c
         try:
-            fit = fit_three_compartment(t, C, dose_i)
+            fit3 = fit_three_compartment(t, C, dose_i)
+            gof3 = compute_gof_three(t, C, fit3)
         except RuntimeError as e:
+            # if 3c fails outright, surface error (UI/report already has fallback paths)
             raise HTTPException(status_code=400, detail=str(e))
 
-        pk_params = compute_pk_parameters_three(fit, dose_i)
-        gof = compute_gof_three(t, C, fit)
-        results.append({
-            "subject": subj,
-            "fit": fit,
-            "pk_params": pk_params,
-            "gof": gof
-        })
+        # fit 2c for model selection guardrail
+        try:
+            fit2 = fit_two_compartment(t, C, dose_i)
+            gof2 = compute_gof_two(t, C, fit2)
+            # AICc(2c)
+            k2 = 4
+            AICc2 = gof2["AIC"] + (2*k2*(k2+1))/max(n - k2 - 1, 1) if n > (k2 + 1) else float('inf')
+        except Exception:
+            fit2, gof2, AICc2 = None, None, float('inf')
+
+        # AICc(3c)
+        AICc3 = gof3.get("AICc")
+        if AICc3 is None or not np.isfinite(AICc3):
+            k3 = 6
+            AICc3 = gof3["AIC"] + (2*k3*(k3+1))/max(n - k3 - 1, 1) if n > (k3 + 1) else float('inf')
+
+        # separation + tail strength guard (scale-invariant & amplitude-aware)
+        sep_log   = float(gof3.get("rate_sep_log", np.nan))
+        tail_frac = float(gof3.get("tail_auc_frac", np.nan))
+        bad_sep   = (not np.isfinite(sep_log)) or (sep_log < np.log(1.5))   # < ~0.405
+        weak_tail = (not np.isfinite(tail_frac)) or (tail_frac < 0.08)      # < 8% of AUC
+
+        # Demote only if: too few points, OR 3c not clearly better by AICc, OR BOTH (near-degenerate AND negligible tail)
+        demote = (n < 8) or not (AICc3 + 2 < AICc2) or (bad_sep and weak_tail)
+
+        if demote and (fit2 is not None):
+            pk_params = compute_pk_parameters_two(fit2, dose_i)
+            results.append({
+                "subject": subj,
+                "fit": fit2,
+                "pk_params": pk_params,
+                "gof": {**gof2, "AICc": float(AICc2)},
+                "note": "Auto-demoted to 2-comp: ΔAICc<2 and/or poor rate separation or n<8."
+            })
+        else:
+            pk_params = compute_pk_parameters_three(fit3, dose_i)
+            results.append({
+                "subject": subj,
+                "fit": fit3,
+                "pk_params": pk_params,
+                "gof": gof3
+            })
     return {"results": results}
 
 @app.post("/report")
@@ -325,30 +364,80 @@ async def create_report(payload: dict = Body(...)):
             try:
                 if len(t_sub) < 7:
                     raise RuntimeError("Too few points for a stable three-compartment fit; using 2c.")
-                
-                fit = fit_three_compartment(t_sub, C_sub, dose_sub)
-                pk_params = compute_pk_parameters_three(fit, dose_sub)
-                gof = compute_gof_three(t_sub, C_sub, fit)
+
+                # --- fit 3-comp and compute GOF on log-scale ---
+                fit3 = fit_three_compartment(t_sub, C_sub, dose_sub)
+                gof3 = compute_gof_three(t_sub, C_sub, fit3)
+
+                # --- also fit 2-comp for model selection guardrail ---
+                fit2 = fit_two_compartment(t_sub, C_sub, dose_sub)
+                gof2 = compute_gof_two(t_sub, C_sub, fit2)
+
+                # --- AICc and rate-separation checks ---
+                n = len(t_sub); k2, k3 = 4, 6
+                AICc2 = gof2["AIC"] + (2*k2*(k2+1))/max(n - k2 - 1, 1) if n > (k2 + 1) else float('inf')
+                AICc3 = gof3.get("AICc")
+                if AICc3 is None or not np.isfinite(AICc3):
+                    AICc3 = gof3["AIC"] + (2*k3*(k3+1))/max(n - k3 - 1, 1) if n > (k3 + 1) else float('inf')
+                    
+                sep_log   = float(gof3.get("rate_sep_log", np.nan))
+                tail_frac = float(gof3.get("tail_auc_frac", np.nan))
+                bad_sep   = (not np.isfinite(sep_log)) or (sep_log < np.log(1.5))
+                weak_tail = (not np.isfinite(tail_frac)) or (tail_frac < 0.08)
+                use_two   = (n < 8) or not (AICc3 + 2 < AICc2) or (bad_sep and weak_tail)
+
+
                 md = payload["metadata"]
-                k10 = float(md.get("k10", 0.1))
-                k12 = float(md.get("k12", 0.2))
-                k21 = float(md.get("k21", 0.05))
-                k13 = float(md.get("k13", 0.1))
-                k31 = float(md.get("k31", 0.03))
-                V1  = float(md.get("V1", 5.0))
-                V2  = float(md.get("V2", 20.0))
-                V3  = float(md.get("V3", 30.0))
-                meta_events = payload["metadata"].get("dosing", None)
-                dosing_events = meta_events if meta_events else [{
-                    "time": 0.0, "dose": dose_sub,
-                    **({"Tinf": float(payload["metadata"].get("Tinf", 0.0))}
-                       if payload["metadata"].get("Tinf") else {})
-                }]
-                buf_lin, buf_log, buf_mech, buf_dose = plot_fit_three(
-                    t_sub, C_sub, fit, k10, k12, k21, k13, k31, V1, V2, V3, dosing=dosing_events)
-                
+                if use_two:
+                    mdl_for_page = "two"
+                    elems.append(Paragraph(
+                        f"Note: Auto-demoted to two-compartment for Subject {subj} "
+                        f"(ΔAICc<2 and/or poor rate separation or n<8).", styles["Italic"]))
+                    elems.append(Spacer(1, 6))
+
+                    fit = fit2
+                    pk_params = compute_pk_parameters_two(fit2, dose_sub)
+                    gof = {**gof2, "AICc": float(AICc2)}
+
+                    k10 = float(md.get("k10", 0.1))
+                    k12 = float(md.get("k12", 0.2))
+                    k21 = float(md.get("k21", 0.05))
+                    V1  = float(md.get("V1", 5.0))
+                    V2  = float(md.get("V2", 20.0))
+                    meta_events = payload["metadata"].get("dosing", None)
+                    dosing_events = meta_events if meta_events else [{
+                        "time": 0.0, "dose": dose_sub,
+                        **({"Tinf": float(payload["metadata"].get("Tinf", 0.0))}
+                           if payload["metadata"].get("Tinf") else {})
+                    }]
+                    buf_lin, buf_log, buf_mech, buf_dose = plot_fit_two(
+                        t_sub, C_sub, fit, k10, k12, k21, V1, V2, dosing=dosing_events)
+
+                else:
+                    mdl_for_page = "three"
+                    fit = fit3
+                    pk_params = compute_pk_parameters_three(fit3, dose_sub)
+                    gof = gof3
+
+                    k10 = float(md.get("k10", 0.1))
+                    k12 = float(md.get("k12", 0.2))
+                    k21 = float(md.get("k21", 0.05))
+                    k13 = float(md.get("k13", 0.1))
+                    k31 = float(md.get("k31", 0.03))
+                    V1  = float(md.get("V1", 5.0))
+                    V2  = float(md.get("V2", 20.0))
+                    V3  = float(md.get("V3", 30.0))
+                    meta_events = payload["metadata"].get("dosing", None)
+                    dosing_events = meta_events if meta_events else [{
+                        "time": 0.0, "dose": dose_sub,
+                        **({"Tinf": float(payload["metadata"].get("Tinf", 0.0))}
+                           if payload["metadata"].get("Tinf") else {})
+                    }]
+                    buf_lin, buf_log, buf_mech, buf_dose = plot_fit_three(
+                        t_sub, C_sub, fit, k10, k12, k21, k13, k31, V1, V2, V3, dosing=dosing_events)
+
             except RuntimeError as e:
-                # Fallback to two-compartment to keep report generation robust
+                # Fallback on hard failure
                 mdl_for_page = "two"
                 elems.append(Paragraph(
                     f"Note: three-compartment fit failed for Subject {subj} "
@@ -369,7 +458,6 @@ async def create_report(payload: dict = Body(...)):
                     **({"Tinf": float(payload["metadata"].get("Tinf", 0.0))}
                        if payload["metadata"].get("Tinf") else {})
                 }]
-                
                 buf_lin, buf_log, buf_mech, buf_dose = plot_fit_two(
                     t_sub, C_sub, fit, k10, k12, k21, V1, V2, dosing=dosing_events)
 

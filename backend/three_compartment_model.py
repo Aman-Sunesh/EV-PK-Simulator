@@ -223,7 +223,7 @@ def compute_gof_three(t: np.ndarray, C: np.ndarray, fit: dict) -> dict:
     ss_tot = float(np.sum((y - np.mean(y))**2))
     r2_log = 1.0 - ss_res/ss_tot if ss_tot > 0 else np.nan
 
-    n = y.size; k = 6
+    n = y.size; k = 7
     sigma2 = ss_res / max(n,1)
     AIC  = n*np.log(max(sigma2, 1e-300)) + 2*k
     AICc = AIC + (2*k*(k+1))/(max(n - k - 1, 1)) if n > (k + 1) else float('nan')

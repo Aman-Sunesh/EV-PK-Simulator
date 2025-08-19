@@ -56,6 +56,24 @@ app = FastAPI()
 # def _startup():
 #     init_db()
 
+def _pred_2c_macro(t, p):
+    import numpy as np
+    return p["A"] * np.exp(-p["alpha"] * t) + p["B"] * np.exp(-p["beta"] * t)
+
+def _pred_3c_macro(t, p):
+    import numpy as np
+    return (p["A"] * np.exp(-p["alpha"] * t)
+          + p["B"] * np.exp(-p["beta"]  * t)
+          + p["C"] * np.exp(-p["gamma"] * t))
+
+def _aicc_from_resid(resid, n, k):
+    import numpy as np
+    sse = float(np.sum(resid**2))
+    if sse <= 0 or n <= k + 1:
+        return float("inf")
+    aic = n * np.log(sse / n) + 2 * k
+    return aic + (2 * k * (k + 1)) / (n - k - 1)
+
 # allow cross-origin in development
 app.add_middleware(
     CORSMiddleware,
@@ -100,7 +118,8 @@ async def upload_csv(file: UploadFile = File(...)):
     return {
       "preview": preview,
      "data": full,
-      "warnings": warnings
+      "warnings": warnings,
+      "hasDose": "dose" in df.columns
     }
 
 @app.get("/studies")
@@ -152,6 +171,7 @@ async def fit_one(payload: dict):
     # build a DataFrame from the incoming JSON
     df = pd.DataFrame(payload.get("data", []))
     df.columns = [c.strip() for c in df.columns]  # tidy (preserve case)
+    seeds = payload.get("seeds")  # optional seed guesses
 
     # detect subject column once, accept either 'Subject' or 'subject'
     subj_col = "Subject" if "Subject" in df.columns else ("subject" if "subject" in df.columns else None)
@@ -172,9 +192,14 @@ async def fit_one(payload: dict):
             dose_i = float(payload.get("dose", 1.0))
 
         try:
-            fit = fit_one_compartment(t, C, dose_i)
+            if seeds is not None:
+                try:
+                    fit = fit_one_compartment(t, C, dose_i, seeds=seeds)
+                except TypeError:
+                    fit = fit_one_compartment(t, C, dose_i)
+            else:
+                fit = fit_one_compartment(t, C, dose_i)
         except RuntimeError as e:
-            # turn into a clean HTTP 400
             raise HTTPException(status_code=400, detail=str(e))
 
         if isinstance(fit.get("pcov"), np.ndarray):
@@ -182,12 +207,16 @@ async def fit_one(payload: dict):
 
         pk     = compute_pk_parameters(fit, dose_i)
         gof    = compute_gof(t, C, fit, dose_i)
+        n   = len(t); k1 = 2
+        AICc1 = gof["AIC"] + (2*k1*(k1+1)) / (n - k1 - 1) if n > (k1 + 1) else float("inf")
+        gof["AICc"] = float(AICc1)
 
         results.append({
             "subject":   subj,
             "fit":       fit,
             "pk_params": pk,
-            "gof":       gof
+            "gof":       gof,
+            "n":         int(len(t))
         })
 
     return {"results": results}
@@ -195,9 +224,11 @@ async def fit_one(payload: dict):
 @app.post("/fit/two_compartment")
 async def fit_two(payload: dict):
     df = pd.DataFrame(payload.get("data", []))
-    df.columns = [c.strip() for c in df.columns]            
-    has_subject = "Subject" in df.columns or "subject" in df.columns
-    subj_col = "Subject" if "Subject" in df.columns else ("subject" if "subject" in df.columns else None)    
+    df = preprocess_data(df)  # normalize and clean     
+    seeds = payload.get("seeds")      
+    sel = (payload.get("selection") or {})
+    allow_demote = bool(sel.get("allow_demote", True))
+    subj_col = "Subject" if "Subject" in df.columns else ("subject" if "subject" in df.columns else None)  
     
     results = []
    
@@ -211,27 +242,98 @@ async def fit_two(payload: dict):
         C      = grp["concentration"].values
         dose_i = float(grp["dose"].iloc[0]) if "dose" in grp.columns else float(payload.get("dose", 1.0))
 
+        # fit 2c (with optional seeds) 
         try:
-            fit = fit_two_compartment(t, C, dose_i)
+            if seeds is not None:
+                try:
+                    fit2 = fit_two_compartment(t, C, dose_i, seeds=seeds)
+                except TypeError:
+                    fit2 = fit_two_compartment(t, C, dose_i)
+            else:
+                fit2 = fit_two_compartment(t, C, dose_i)
         except RuntimeError as e:
-            # turn into a clean HTTP 400
             raise HTTPException(status_code=400, detail=str(e))
-        
-        pk_params = compute_pk_parameters_two(fit, dose_i)
-        gof       = compute_gof_two(t, C, fit)
 
-        results.append({
-            "subject":   subj,
-            "fit":       fit,
-            "pk_params": pk_params,
-            "gof":       gof
-        })
+        gof2 = compute_gof_two(t, C, fit2)
+        n    = len(t)
+        k2   = 4
+        AICc2 = gof2["AIC"] + (2*k2*(k2+1))/max(n - k2 - 1, 1) if n > (k2 + 1) else float("inf")
+
+        # fit 1c for guardrail 
+        fit1 = fit_one_compartment(t, C, dose_i)
+        gof1 = compute_gof(t, C, fit1, dose_i)
+        k1   = 2
+        AICc1 = gof1["AIC"] + (2*k1*(k1+1))/max(n - k1 - 1, 1) if n > (k1 + 1) else float("inf")
+
+        # simple identifiability heuristics for 2c 
+        A     = float(fit2.get("A", np.nan))
+        B     = float(fit2.get("B", np.nan))
+        alpha = float(fit2.get("alpha", np.nan))
+        beta  = float(fit2.get("beta", np.nan))
+        B_rel    = (abs(B) / max(abs(A) + abs(B), 1e-12)) if np.isfinite(A) and np.isfinite(B) else 0.0
+        sep_rel2 = (abs(alpha - beta) / max(alpha, beta)) if np.isfinite(alpha) and np.isfinite(beta) and max(alpha, beta) > 0 else 0.0
+
+        # Demote if: thin data OR (1c ~ 2c by AICc) AND 2c looks degenerate
+        propose_demote = (n < 6) or (((B_rel < 0.03) or (sep_rel2 < 0.05)) and not (AICc2 + 2 < AICc1))
+        # Honor user preference
+        use_one = allow_demote and propose_demote
+
+        selection_diag = {
+            "AICc1": float(AICc1),
+            "AICc2": float(AICc2),
+            "delta21": float(AICc2 - AICc1),  # negative favors 2c
+            "sep_rel2": float(sep_rel2),
+            "B_rel": float(B_rel),
+            "n": int(n),
+            "demoted": bool(use_one),
+            "allow_demote": bool(allow_demote),
+            "would_demote": bool(propose_demote)
+        }
+
+        if use_one:
+            gof1 = {**gof1, "AICc": float(AICc1)}
+            pk_params = compute_pk_parameters(fit1, dose_i)
+            results.append({
+                "subject":   subj,
+                "fit":       fit1,
+                "pk_params": pk_params,
+                "gof":       gof1,
+                "n":         int(n),
+                "selection_diag": {**selection_diag, "reason": "ΔAICc<2 vs 1c and/or poor rate separation or tiny B, or n<6."},
+                "note": "Auto-demoted to 1-comp."
+            })
+
+        else:
+            gof2 = {**gof2, "AICc": float(AICc2)}
+            pk_params = compute_pk_parameters_two(fit2, dose_i)
+            results.append({
+                "subject":   subj,
+                "fit":       fit2,
+                "pk_params": pk_params,
+                "gof":       gof2,
+                "n":         int(n),
+                "selection_diag": selection_diag,
+                **({ "note": "Auto-demotion disabled by user; kept 2-comp." }
+                   if (not allow_demote and propose_demote) else {})
+            })
+
     return {"results": results}
 
 @app.post("/fit/three_compartment")
 async def fit_three(payload: dict):
     df = pd.DataFrame(payload.get("data", []))
     df.columns = [c.strip() for c in df.columns]
+    seeds = payload.get("seeds")
+
+    sel = (payload.get("selection") or {})
+    crit = str(sel.get("criterion", "AICc_linear")).lower()   # "aicc_linear" | "aicc_log"
+    delta_keep = float(sel.get("deltaAICc", 2.0))
+    sep_min = float(sel.get("sep_rel_min", 0.05))
+    tail_min = float(sel.get("tail_auc_min", 0.08))
+    force_three = bool(sel.get("force_three", False))
+    if "allow_demote" in sel:
+        force_three = not bool(sel["allow_demote"])
+
     subj_col = "Subject" if "Subject" in df.columns else ("subject" if "subject" in df.columns else None)
     results = []
     groups = df.groupby(subj_col) if subj_col else [("All", df)]
@@ -244,17 +346,28 @@ async def fit_three(payload: dict):
 
         # try 3c
         try:
-            fit3 = fit_three_compartment(t, C, dose_i)
+            # Pass seeds only if provided; fall back if the function doesn't accept it
+            if seeds is not None:
+                try:
+                    fit3 = fit_three_compartment(t, C, dose_i, seeds=seeds)
+                except TypeError:
+                    # fit_three_compartment doesn't support `seeds`
+                    fit3 = fit_three_compartment(t, C, dose_i)
+            else:
+                fit3 = fit_three_compartment(t, C, dose_i)
+
             gof3 = compute_gof_three(t, C, fit3)
+
         except RuntimeError as e:
             # if 3c fails outright, surface error (UI/report already has fallback paths)
             raise HTTPException(status_code=400, detail=str(e))
+
 
         # fit 2c for model selection guardrail
         try:
             fit2 = fit_two_compartment(t, C, dose_i)
             gof2 = compute_gof_two(t, C, fit2)
-            # AICc(2c)
+            # AICc(2c) linear-scale default (may be overridden below)
             k2 = 4
             AICc2 = gof2["AIC"] + (2*k2*(k2+1))/max(n - k2 - 1, 1) if n > (k2 + 1) else float('inf')
         except Exception:
@@ -266,31 +379,115 @@ async def fit_three(payload: dict):
             k3 = 6
             AICc3 = gof3["AIC"] + (2*k3*(k3+1))/max(n - k3 - 1, 1) if n > (k3 + 1) else float('inf')
 
+        # optional log-scale AICc override
+        if crit == "aicc_log":
+            eps = 1e-12
+            try:
+                Cp3 = _pred_3c_macro(t, fit3)
+                r3 = np.log(np.maximum(C, eps)) - np.log(np.maximum(Cp3, eps))
+                AICc3 = _aicc_from_resid(r3, n, 6)
+            except Exception:
+                pass
+            if fit2 is not None:
+                try:
+                    Cp2 = _pred_2c_macro(t, fit2)
+                    r2 = np.log(np.maximum(C, eps)) - np.log(np.maximum(Cp2, eps))
+                    AICc2 = _aicc_from_resid(r2, n, 4)
+                except Exception:
+                    pass
+
+        # Also fit 1c for possible cascade demotion
+        fit1 = fit_one_compartment(t, C, dose_i)
+        gof1 = compute_gof(t, C, fit1, dose_i)
+        k1   = 2
+        AICc1 = gof1["AIC"] + (2*k1*(k1+1))/max(n - k1 - 1, 1) if n > (k1 + 1) else float("inf")
+
         # separation + tail strength guard (scale-invariant & amplitude-aware)
         sep_log   = float(gof3.get("rate_sep_log", np.nan))
         tail_frac = float(gof3.get("tail_auc_frac", np.nan))
-        bad_sep   = (not np.isfinite(sep_log)) or (sep_log < np.log(1.5))   # < ~0.405
-        weak_tail = (not np.isfinite(tail_frac)) or (tail_frac < 0.08)      # < 8% of AUC
+        sep_rel   = float(gof3.get("rate_sep_rel", 0.0))
+        bad_sep   = (not np.isfinite(sep_log)) or (sep_log < np.log(1.5))
+        weak_tail = (not np.isfinite(tail_frac)) or (tail_frac < tail_min)
 
-        # Demote only if: too few points, OR 3c not clearly better by AICc, OR BOTH (near-degenerate AND negligible tail)
-        demote = (n < 8) or not (AICc3 + 2 < AICc2) or (bad_sep and weak_tail)
+        selection_diag = {
+            "AICc2": float(AICc2),
+            "AICc3": float(AICc3),
+            "delta": float(AICc3 - AICc2),   # 3c − 2c (negative favors 3c)
+            "sep_rel": float(sep_rel),
+            "n": int(n),
+            "criterion": crit,
+            "delta_keep": float(delta_keep),
+            "sep_rel_min": float(sep_min),
+            "tail_auc_min": float(tail_min),
+            "allow_demote": (not force_three)
+        }
 
-        if demote and (fit2 is not None):
-            pk_params = compute_pk_parameters_two(fit2, dose_i)
-            results.append({
-                "subject": subj,
-                "fit": fit2,
-                "pk_params": pk_params,
-                "gof": {**gof2, "AICc": float(AICc2)},
-                "note": "Auto-demoted to 2-comp: ΔAICc<2 and/or poor rate separation or n<8."
-            })
+        reason_str = f"ΔAICc<{delta_keep:g} and/or poor 3c rate separation or n<8."
+
+        # Demote if too few points OR (poor separation/tail) AND 3c not clearly better
+        demote = (n < 8) or (((sep_rel < sep_min) or bad_sep or weak_tail) and not (AICc3 + delta_keep < AICc2))
+        
+        if force_three:
+            demote = False
+
+        if demote:
+            # Decide whether 2c is still over-parameterized vs 1c
+            if fit2 is not None:
+                A     = float(fit2.get("A", np.nan))
+                B     = float(fit2.get("B", np.nan))
+                alpha = float(fit2.get("alpha", np.nan))
+                beta  = float(fit2.get("beta", np.nan))
+                B_rel    = (abs(B) / max(abs(A) + abs(B), 1e-12)) if np.isfinite(A) and np.isfinite(B) else 0.0
+                sep_rel2 = (abs(alpha - beta) / max(alpha, beta)) if np.isfinite(alpha) and np.isfinite(beta) and max(alpha, beta) > 0 else 0.0
+                use_one  = (n < 6) or (((B_rel < 0.03) or (sep_rel2 < 0.05)) and not (AICc2 + 2 < AICc1))
+            else:
+                B_rel, sep_rel2, use_one = np.nan, np.nan, True
+
+            if use_one:
+                pk_params = compute_pk_parameters(fit1, dose_i)
+                results.append({
+                    "subject": subj,
+                    "fit": fit1,
+                    "pk_params": pk_params,
+                    "gof": gof1,
+                    "n": int(n),
+                    "selection_diag": {**selection_diag,
+                        "AICc1": float(AICc1),
+                        "sep_rel2": (float(sep_rel2) if np.isfinite(sep_rel2) else None),
+                        "B_rel": (float(B_rel) if np.isfinite(B_rel) else None),
+                        "demoted": True,
+                        "reason": "3→2 demotion + 2→1 (ΔAICc<2 vs 1c and/or poor 2c separation/tiny B, or n<6)."
+                    },
+                    "note": "Auto-demoted to 1-comp."
+                })
+
+            else:
+                pk_params = compute_pk_parameters_two(fit2, dose_i)
+                results.append({
+                    "subject": subj,
+                    "fit": fit2,
+                    "pk_params": pk_params,
+                    "gof": {**gof2, "AICc": float(AICc2)},
+                    "n": int(n),
+                    "selection_diag": {**selection_diag,
+                        "AICc1": float(AICc1),
+                        "sep_rel2": float(sep_rel2),
+                        "B_rel": float(B_rel),
+                        "demoted": True,
+                        "reason": reason_str
+                    },
+                    "note": "Auto-demoted to 2-comp."
+                })
+
         else:
             pk_params = compute_pk_parameters_three(fit3, dose_i)
             results.append({
                 "subject": subj,
                 "fit": fit3,
                 "pk_params": pk_params,
-                "gof": gof3
+                "gof": gof3,
+                "n": int(n),
+                "selection_diag": {**selection_diag, "AICc1": float(AICc1), "demoted": False}
             })
     return {"results": results}
 
@@ -324,6 +521,7 @@ async def create_report(payload: dict = Body(...)):
 
     for idx, (subj, grp) in enumerate(groups):
         mdl_for_page = model
+        selection_diag = None
 
         # preprocess this subject
         df_sub = preprocess_data(grp[["time", "concentration"]].copy())
@@ -384,8 +582,30 @@ async def create_report(payload: dict = Body(...)):
                 tail_frac = float(gof3.get("tail_auc_frac", np.nan))
                 bad_sep   = (not np.isfinite(sep_log)) or (sep_log < np.log(1.5))
                 weak_tail = (not np.isfinite(tail_frac)) or (tail_frac < 0.08)
-                use_two   = (n < 8) or not (AICc3 + 2 < AICc2) or (bad_sep and weak_tail)
+                sep_rel = float(gof3.get("rate_sep_rel", 0.0))
 
+                # demotion rule: only demote when the below conditions are true
+                use_two = (n < 8) or ((sep_rel < 0.05) and not (AICc3 + 2 < AICc2))
+    
+                # Honor user preference from metadata (default True = allow demotion)
+                md = payload["metadata"]
+                allow_demote = bool(md.get("allow_demote", True))
+                
+                if not allow_demote and use_two:
+                    elems.append(Paragraph(
+                        f"Note: Auto-demotion disabled by user; keeping three-compartment.",
+                        styles["Italic"]))
+                    use_two = False
+
+                # record model-selection diagnostics for the PDF page
+                selection_diag = {
+                    "AICc2": float(AICc2),
+                    "AICc3": float(AICc3),
+                    "delta": float(AICc3 - AICc2),  # 3c − 2c (negative favors 3c)
+                    "sep_rel": float(sep_rel),
+                    "n": int(n),
+                    "demoted": bool(use_two),
+                }
 
                 md = payload["metadata"]
                 if use_two:
@@ -475,8 +695,8 @@ async def create_report(payload: dict = Body(...)):
         elems.append(Paragraph(f"Subject {subj}", styles["Title"]))
         elems.append(Spacer(1, 12))
 
-        # Mechanistic central vs. peripheral
-        if model in ("two","three") and buf_mech is not None:
+        # Mechanistic central vs. peripheral (use effective page model after demotion)
+        if mdl_for_page in ("two","three") and (buf_mech is not None):
             elems.append(Paragraph("Central vs. Peripheral Compartments", styles["Heading2"]))
             elems.append(Image(buf_mech, width=400, height=200))
             elems.append(Spacer(1, 12))
@@ -567,20 +787,41 @@ async def create_report(payload: dict = Body(...)):
 
         # Goodness-of-fit
         gof_data = [["R²", f"{gof['R2']:.3f}"], ["AIC", f"{gof['AIC']:.1f}"]]
+        if "AICc" in gof and np.isfinite(gof["AICc"]):
+            gof_data.append(["AICc", f"{gof['AICc']:.1f}"])
         gof_tbl  = Table(gof_data, hAlign="LEFT")
         gof_tbl.setStyle(TableStyle([("GRID", (0,0),(-1,-1), 0.5, colors.grey)]))
         elems.append(Paragraph("Goodness-of-Fit", styles["Heading2"]))
         elems.append(gof_tbl)
         elems.append(Spacer(1, 12))
 
+        if selection_diag is not None:
+            diag_rows = [
+                ["AICc (2c)", f"{selection_diag['AICc2']:.2f}"],
+                ["AICc (3c)", f"{selection_diag['AICc3']:.2f}"],
+                ["ΔAICc (3c − 2c)", f"{selection_diag['delta']:.2f}"],
+                ["rate_sep_rel", f"{selection_diag['sep_rel']:.3f}"],
+            ]
+
+            diag_tbl = Table(diag_rows, hAlign="LEFT")
+            diag_tbl.setStyle(TableStyle([
+                ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+            ]))
+
+            elems.append(Paragraph("Model Selection Diagnostics", styles["Heading2"]))
+            elems.append(diag_tbl)
+            elems.append(Spacer(1, 12))
+
         # Diagnostics (Residuals + VPC)
         try:
             # Map UI labels → diagnostics' expected keys
             model_key = {"one":"1c", "two":"2c", "three":"3c"}[mdl_for_page]
+            
             res_buf = plot_residuals(
                 t_sub, C_sub, fit, model_key,
                 dose_sub if (model_key == "1c") else None
             )
+
             vpc_buf = plot_vpc(
                 t_sub, fit, model_key,
                 dose_sub if (model_key == "1c") else None,
@@ -619,6 +860,47 @@ async def create_report(payload: dict = Body(...)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
+# if two 3c rates are nearly equal, merge them and return a 2c macro set
+def _maybe_demote_3c_macro(params: Dict, tol: float = 0.02):
+    """
+    If any pair among (alpha, beta, gamma) are within 'tol' relative separation,
+    merge their amplitudes and return a 2-compartment macro dict {A,alpha,B,beta}.
+    Returns None if no merge.
+    """
+    try:
+        A, B, C = float(params["A"]), float(params["B"]), float(params["C"])
+        al, be, ga = float(params["alpha"]), float(params["beta"]), float(params["gamma"])
+    except Exception:
+        return None
+    
+    rates = np.array([al, be, ga], dtype=float)
+    amps  = np.array([A,  B,  C],  dtype=float)
+
+    if not (np.all(np.isfinite(rates)) and np.all(np.isfinite(amps))):
+        return None
+    
+    pairs = [(0,1),(0,2),(1,2)]
+    for i, j in pairs:
+        ri, rj = rates[i], rates[j]
+
+        if min(ri, rj) <= 0:
+            continue
+
+        rel_sep = abs(ri - rj) / max(ri, rj)
+
+        if rel_sep < tol:
+            # merge i & j into one exponential with amp sum and rate as amp-weighted avg
+            merged_rate = (amps[i]*ri + amps[j]*rj) / (amps[i] + amps[j]) if (amps[i]+amps[j]) != 0 else max(ri, rj)
+            merged_amp  = amps[i] + amps[j]
+            k = 3 - i - j  # the remaining index
+
+            return {
+                "A": float(merged_amp), "alpha": float(merged_rate),
+                "B": float(amps[k]),   "beta":  float(rates[k])
+            }
+        
+    return None
+
 @app.post("/simulate_pk")
 async def simulate_pk(payload: dict = Body(...)):
     """
@@ -642,11 +924,17 @@ async def simulate_pk(payload: dict = Body(...)):
     // dosing/program/repeat as before…
     "t_end": 24.0,
     "dt": 0.1
+    // Optional: estimate params from raw data and use them here
+    "estimate_from_data": true,          
+    "data": [{ "time": ..., "concentration": ..., "dose"?: ... , "Subject"?: ... }, ...],
+    "dose": 100,          // used for fitting if data lacks a 'dose' column
+    "fit_subject": "S01"  // choose a subject if data contains multiple
     }
     Returns:
     { "time": [...], "conc": [...],
         "summary": { Cmax, Tmax, AUC, (optional) Cmax_ss, Cmin_ss, Cavg_ss },
-        "dosing": [...]
+        "dosing": [...],
+        "fit_from_data"?: { "used": true, "subject": "S01" | "All", "dose_fit": 100.0 }
     }
     """
     model = payload.get("model", "1c")
@@ -657,6 +945,7 @@ async def simulate_pk(payload: dict = Body(...)):
     program = payload.get("program", None)
     t_end  = float(payload.get("t_end", 24.0))
     dt     = float(payload.get("dt", 0.1))
+    fit_info = None
 
     try:
         # priority: program > dosing > repeat (legacy)
@@ -670,6 +959,76 @@ async def simulate_pk(payload: dict = Body(...)):
             else:
                 dosing = program_dosing
             repeat = None
+
+        # optionally estimate params from raw data and use them for simulation 
+        if (payload.get("estimate_from_data") or payload.get("fit_from_data")) and payload.get("data"):
+            df_fit = preprocess_data(pd.DataFrame(payload["data"]))
+
+            # choose subject if specified
+            fit_subj = payload.get("fit_subject")
+            subj_col = "Subject" if "Subject" in df_fit.columns else ("subject" if "subject" in df_fit.columns else None)
+            
+            if subj_col:
+                uniq = pd.unique(df_fit[subj_col])
+                if fit_subj is None and len(uniq) > 1:
+                    raise HTTPException(status_code=400,
+                        detail=f"Multiple subjects found {uniq.tolist()}. Provide 'fit_subject'.")
+                
+            if subj_col and fit_subj is not None:
+                df_fit = df_fit[df_fit[subj_col] == fit_subj].copy()
+            
+            t_fit = df_fit["time"].values
+            C_fit = df_fit["concentration"].values
+            if t_fit.size < 3 or C_fit.size < 3:
+                raise HTTPException(status_code=400, detail="Not enough points to fit parameters (need ≥3).")
+
+            # dose for fitting: prefer column, else payload.dose, else 1.0
+            if "dose" in df_fit.columns and len(df_fit["dose"]) > 0:
+                dose_fit = float(df_fit["dose"].iloc[0])
+            else:
+                dose_fit = float(payload.get("dose", 1.0))
+
+            # run fit and map to sim params (use macro params for 2c/3c)
+            base_params = dict(params)  # preserve F, ka, Tinf, etc.
+
+            if model == "1c":                
+                fit = fit_one_compartment(t_fit, C_fit, dose_fit)
+                params = {**base_params, "Vd": float(fit["Vd"]), "kel": float(fit["kel"])}
+            elif model == "2c":
+                fit = fit_two_compartment(t_fit, C_fit, dose_fit)
+                params = {**base_params,
+                    "A": float(fit["A"]), "alpha": float(fit["alpha"]),
+                    "B": float(fit["B"]), "beta": float(fit["beta"])
+                }
+            elif model == "3c":
+                fit = fit_three_compartment(t_fit, C_fit, dose_fit)
+                params = {**base_params,
+                    "A": float(fit["A"]), "alpha": float(fit["alpha"]),
+                    "B": float(fit["B"]), "beta": float(fit["beta"]),
+                    "C": float(fit["C"]), "gamma": float(fit["gamma"])
+                }
+            else:
+                raise HTTPException(status_code=400, detail="model must be '1c', '2c', or '3c'")
+            
+            fit_info = {"used": True, "subject": (str(fit_subj) if fit_subj is not None else ("All" if subj_col else None)), "dose_fit": dose_fit}
+
+        merge_tol = float(payload.get("rate_merge_tol", 0.02))
+        if model == "3c" and all(k in params for k in ("A","alpha","B","beta","C","gamma")):
+            merged = _maybe_demote_3c_macro(params, tol=merge_tol)
+
+            if merged is not None:
+                result = simulate_two_comp_route(
+                    route=route, params=merged, dosing=dosing, repeat=repeat, t_end=t_end, dt=dt
+                )
+
+                result["note"] = (
+                    "Auto-demoted to 2-comp: two 3c rates nearly equal; "
+                    "tail merged (equivalent profile)."
+                )
+
+                if fit_info:
+                    result["fit_from_data"] = {**fit_info, "demoted_to": "2c", "merge_tol": merge_tol}
+                return result
 
         if model == "1c":
             result = simulate_one_comp_route(
@@ -703,9 +1062,11 @@ async def simulate_pk(payload: dict = Body(...)):
 
         else:
             raise HTTPException(status_code=400, detail="model must be '1c', '2c', or '3c'")
-    except ValueError as e:
+    except (ValueError, RuntimeError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    if fit_info:
+        result["fit_from_data"] = fit_info
     return result
 
 def _run_what_if(payload: dict) -> Dict:

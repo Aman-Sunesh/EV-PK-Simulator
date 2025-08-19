@@ -3,6 +3,10 @@ import { useCallback, useState, useEffect, useMemo } from "react";
 import { useDropzone } from "react-dropzone";
 import axios from "axios";
 
+const RATE_MERGE_TOL = 0.02; // 2% threshold for 3c→2c rate-merge demotion
+const fmt = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : "—");
+
+
 export default function Upload() {
   const PRESETS = {
     "EV (IV, mouse)": {
@@ -70,6 +74,8 @@ export default function Upload() {
 
   // Three-compartment (macro & micro)
   const [useFitThreeMacros, setUseFitThreeMacros] = useState(true);
+  const [allowDemoteThree, setAllowDemoteThree] = useState(true);
+  const [allowDemoteTwo, setAllowDemoteTwo] = useState(true);
   const [A3, setA3] = useState(PRESETS[preset].threeM.A);
   const [alpha3, setAlpha3] = useState(PRESETS[preset].threeM.alpha);
   const [B3, setB3] = useState(PRESETS[preset].threeM.B);
@@ -88,6 +94,18 @@ export default function Upload() {
   // Two-comp parametrization for simulator
   const [paramMode, setParamMode] = useState("macro"); // "macro" | "micro"
   const [useFitTwoMacros, setUseFitTwoMacros] = useState(true);
+
+  // 'analyze' (fit from data) vs 'simulate' (enter fixed params)
+  const [mode, setMode] = useState("analyze");
+  const [showSeeds, setShowSeeds] = useState(false);
+  const [form1c, setForm1c] = useState("micro"); // "micro" (Vd,kel) default | "macro" (A,alpha)
+
+  // checks if uploaded data include per-row dose?
+  const hasDoseFromData = useMemo(() => {
+    if (!Array.isArray(rawData) || rawData.length === 0) return false;
+    const first = rawData[0] || {};
+    return Object.prototype.hasOwnProperty.call(first, "dose");
+  }, [rawData]);
 
   const [A, setA] = useState(PRESETS[preset].twoM.A);
   const [alpha, setAlpha] = useState(PRESETS[preset].twoM.alpha);
@@ -175,6 +193,10 @@ const onDrop = useCallback(async (files) => {
       alert("Upload first");
       return;
     }
+    if (mode !== "analyze") {
+      alert("Switch Parameter source to 'Estimate from data (fit)' to run Analyze.");
+      return;
+    }
     if (!["one","two","three"].includes(selectedModel)) {
       alert("Please select One, Two, or Three compartment first.");
       return;
@@ -186,8 +208,61 @@ const onDrop = useCallback(async (files) => {
                                   "/fit/three_compartment";
     console.log("Hitting endpoint:", endpoint);
 
+    // Build optional seed guesses (only used in Analyze mode)
+    let seeds = undefined;
+    if (selectedModel === "one" && showSeeds) {
+      if (form1c === "micro") {
+        seeds = { Vd: Number(Vd), kel: Number(kel) };
+      } 
+      
+      else {
+        // macro form for 1c: A≈Dose/Vd, alpha=kel
+        const Aseed = dose > 0 ? (Number(dose) / Math.max(Number(Vd), 1e-9)) : undefined;
+        seeds = { A: Aseed, alpha: Number(kel) };
+      }
+    } 
+    
+    else if (selectedModel === "two") {
+      if (paramMode === "macro") {
+        seeds = { A: Number(A), alpha: Number(alpha), B: Number(B), beta: Number(beta) };
+      } 
+      
+      else {
+        seeds = { k10: Number(k10), k12: Number(k12), k21: Number(k21), V1: Number(V1), V2: Number(V2) };
+      }
+    } 
+    
+    else if (selectedModel === "three") {
+      
+      if (paramMode === "macro") {
+        seeds = { A: Number(A3), alpha: Number(alpha3), B: Number(B3), beta: Number(beta3), C: Number(C3), gamma: Number(gamma3) };
+      } 
+      
+      else {
+        seeds = {
+          k10: Number(k103), k12: Number(k123), k21: Number(k213),
+          k13: Number(k133), k31: Number(k313),
+          V1: Number(V13), V2: Number(V23), V3: Number(V33)
+        };
+      }
+    }
+
     try {
-      const res = await axios.post(endpoint, { data: rawData, dose });
+      const body = { data: rawData, dose, seeds };
+      if (selectedModel === "three") {
+        body.selection = {
+          criterion: logY ? "AICc_log" : "AICc_linear",
+          deltaAICc: 2.0,
+          sep_rel_min: 0.05,
+          tail_auc_min: 0.08,
+          allow_demote: allowDemoteThree
+        };
+      } else if (selectedModel === "two") {
+        body.selection = {
+          allow_demote: allowDemoteTwo
+        };
+      }
+      const res = await axios.post(endpoint, body);
       setFitParams(res.data.results);
     } catch (err) {
       alert("Fit error: " + (err.response?.data?.detail || err.message));
@@ -210,6 +285,9 @@ const onDrop = useCallback(async (files) => {
       route: routeLabel,
       dose,
       model: selectedModel,
+      allow_demote: (selectedModel === "three" ? allowDemoteThree
+                     : selectedModel === "two"   ? allowDemoteTwo
+                     : true), // 1c doesn't demote anyway
       ...(rxRoute === "iv_infusion" ? { Tinf } : {}),
       ...((rxRoute === "oral" || rxRoute === "sc") ? { F, ka } : {}),
       ...(selectedModel === "two"
@@ -345,8 +423,7 @@ const onDrop = useCallback(async (files) => {
       if (paramMode === "macro") {
         if (!(alpha3 > 0 && beta3 > 0 && gamma3 > 0)) errs.push("α, β, γ must be > 0");
         const maxr = Math.max(alpha3, beta3, gamma3 || 1);
-        const sep = Math.min(Math.abs(alpha3-beta3), Math.abs(alpha3-gamma3), Math.abs(beta3-gamma3)) / maxr;
-        if (sep < 1e-3) errs.push("α, β, γ too close; choose more distinct values");
+
       } else {
         if (!(k103 > 0 && k123 > 0 && k213 > 0 && k133 > 0 && k313 > 0)) errs.push("All k's must be > 0");
         if (!(V13 > 0 && V23 > 0 && V33 > 0)) errs.push("V1, V2, V3 must be > 0");
@@ -381,8 +458,24 @@ const onDrop = useCallback(async (files) => {
     // 3c micro deps:
     k103, k123, k213, k133, k313, V13, V23, V33,
     // dosing/grid:
-    schedule, repeatCount, repeatDose, repeatTau
+    schedule, repeatCount, repeatDose, repeatTau, program.length
   ]);
+
+    const mergeNote = useMemo(() => {
+    if (selectedModel === "three" && paramMode === "macro") {
+      const maxr = Math.max(alpha3, beta3, gamma3 || 1);
+      const sep =
+        Math.min(
+          Math.abs(alpha3 - beta3),
+          Math.abs(alpha3 - gamma3),
+          Math.abs(beta3 - gamma3)
+        ) / maxr;
+      if (sep < RATE_MERGE_TOL) {
+        return `Rates nearly identical (min rel sep=${fmt(sep, 4)} < ${RATE_MERGE_TOL}). We'll merge the near-equal pair and simulate as an equivalent 2-comp tail.`;
+      }
+    }
+    return null;
+  }, [selectedModel, paramMode, alpha3, beta3, gamma3]);
 
   // Call backend /simulate_pk
   const runSim = async () => {
@@ -438,6 +531,7 @@ const onDrop = useCallback(async (files) => {
       params,
       t_end: Number(tEnd),
       dt: Number(dt),
+      rate_merge_tol: RATE_MERGE_TOL,
       ...(program.length > 0
         ? { program }
         : schedule.length > 0
@@ -519,6 +613,7 @@ const onDrop = useCallback(async (files) => {
       Tinf: Number(Tinf),
       t_end: Number(tEnd),
       dt: Number(dt),
+      rate_merge_tol: RATE_MERGE_TOL,
       ...(optTargetCmax && modelKey === "1c" && rxRoute === "iv_bolus"
         ? { optimize: { target_Cmax_ss: Number(optTargetCmax) || 0 } }
         : {})
@@ -530,6 +625,20 @@ const onDrop = useCallback(async (files) => {
     } catch (err) {
       alert("What-If error: " + (err.response?.data?.detail || err.message));
     }
+  };
+
+  // Home navigation: reset to model picker and clear transient state
+  const goHome = () => {
+    setSelectedModel("");
+    setSelectedStudy("");
+    setFitParams(null);
+    setRawData([]);
+    setData([]);
+    setWarnings([]);
+    setProgram([]);
+    setSchedule([]);
+    setSim(null);
+    setMode("analyze");
   };
 
   // Simple SVG plot
@@ -591,8 +700,8 @@ const onDrop = useCallback(async (files) => {
         <text x={width - margin} y={margin - 12} textAnchor="end" fontSize="12">
           {rxRoute === "iv_bolus" && "Route: IV bolus"}
           {rxRoute === "iv_infusion" && "Route: IV infusion"}
-          {rxRoute === "oral" && `Route: Oral (F=${Number(F).toFixed(2)}, ka=${Number(ka).toFixed(2)} 1/h)`}
-          {rxRoute === "sc" && `Route: SC (F=${Number(F).toFixed(2)}, ka=${Number(ka).toFixed(2)} 1/h)`}
+          {rxRoute === "oral" && `Route: Oral (F=${fmt(F, 2)}, ka=${fmt(ka, 2)} 1/h)`}
+          {rxRoute === "sc" && `Route: SC (F=${fmt(ka, 2)}, ka=${fmt(ka, 2)} 1/h)`}
         </text>
 
         {/* infusion legend swatch */}
@@ -608,6 +717,26 @@ const onDrop = useCallback(async (files) => {
 
   return (
     <div className="container">
+      {selectedModel && (
+        <div style={{marginBottom: 10}}>
+          <button
+            onClick={goHome}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#0a58ca",
+              cursor: "pointer",
+              textDecoration: "underline",
+              padding: 0,
+              fontSize: "0.95rem"
+            }}
+            aria-label="Back to Home"
+            title="Back to Home"
+          >
+            ← Home
+          </button>
+        </div>
+      )}
       <h1>PB–PK Simulator</h1>
       <div className="input-row">
         <label>
@@ -677,7 +806,7 @@ const onDrop = useCallback(async (files) => {
             </label>
           </div>
 
-          {/* Dose Input */}
+          {/* Dose Input (auto-disabled if 'dose' column exists) */}
           <div className="input-row">
             <label>
               Dose:&nbsp;
@@ -686,16 +815,163 @@ const onDrop = useCallback(async (files) => {
                 value={dose}
                 onChange={(e) => setDose(parseFloat(e.target.value))}
                 style={{ width: 80 }}
+                disabled={hasDoseFromData}
+                title={hasDoseFromData ? "Using dose from uploaded data" : "Global dose (mg)"}
               />
               &nbsp;mg
             </label>
+            {hasDoseFromData && (
+              <span className="note" style={{marginLeft:8}}>Using dose from data.</span>
+            )}
           </div>
 
-          {/* Mechanistic parameters (only needed for two-compartment) */}
-          {selectedModel === "two" && (
+          {/* Parameter source (maps to Analyze vs Simulate) */}
+          <div className="input-row mode-switch">
+            <strong>Parameter source:</strong>&nbsp;
+            <label>
+              <input
+                type="radio"
+                value="analyze"
+                checked={mode === "analyze"}
+                onChange={() => setMode("analyze")}
+              />{" "}
+              Estimate from data (fit)
+            </label>
+            &nbsp;&nbsp;
+            <label>
+              <input
+                type="radio"
+                value="simulate"
+                checked={mode === "simulate"}
+                onChange={() => setMode("simulate")}
+              />{" "}
+              Enter fixed parameters (simulate)
+            </label>
+          </div>
+
+          {/* Small toggles so eslint stops complaining and users can control auto-fill behaviors */}
+          {mode === "analyze" && selectedModel === "one" && (
+            <div className="input-row">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={useFitParams}
+                  onChange={e => setUseFitParams(e.target.checked)}
+                />
+                &nbsp;Auto-fill 1c Vd/kel from latest fit
+              </label>
+            </div>
+          )}
+          {mode === "analyze" && selectedModel === "two" && (
+            <div className="input-row">
+              <label>
+                Use fitted A, α, B, β:&nbsp;
+                <input
+                  type="checkbox"
+                  checked={useFitTwoMacros}
+                  onChange={e => setUseFitTwoMacros(e.target.checked)}
+                />
+              </label>
+            </div>
+          )}
+
+          <div className="note">
+            {mode === "analyze"
+              ? "Analyze: upload a dataset and fit parameters. Advanced seed guesses are optional starting values."
+              : "Simulate: no file needed — enter parameters and dosing to generate a synthetic profile."}
+          </div>
+
+          {/* Analyze-only: Advanced seed guesses toggle */}
+          {mode === "analyze" && (
+            <div className="input-row">
+              <a href="#adv" onClick={(e)=>{e.preventDefault(); setShowSeeds(!showSeeds);}}>
+                Advanced: seed guesses {showSeeds ? "▲" : "▼"}
+              </a>
+            </div>
+          )}
+
+          {/* ----- SEED GUESSES (Analyze → Advanced) for 1-comp ----- */}
+          {selectedModel === "one" && mode === "analyze" && showSeeds && (
+            <div className="input-row">
+              <label>Form:&nbsp;
+                <select value={form1c} onChange={e=>setForm1c(e.target.value)}>
+                  <option value="micro">Micro (Vd, kel)</option>
+                  <option value="macro">Macro (A, α)</option>
+                </select>
+              </label>
+              &nbsp;&nbsp;
+              {form1c === "micro" ? (
+                <>
+                  <label title="Apparent volume of distribution (L)">Vd (L):&nbsp;
+                    <input type="number" min="0.001" max="2000" step="0.001"
+                      value={Vd} onChange={e=>setVd(parseFloat(e.target.value))} style={{width:110}}/>
+                  </label>
+                  &nbsp;
+                  <label title="Elimination rate constant (1/h)">kel (1/h):&nbsp;
+                    <input type="number" min="0.02" max="5.0" step="0.01"
+                      value={kel} onChange={e=>setKel(parseFloat(e.target.value))} style={{width:110}}/>
+                  </label>
+                </>
+              ) : (
+                <>
+                  {/* For 1c macro, A≈Dose/Vd and α=kel. Accept as seeds for Analyze or convert to micro for Simulate. */}
+                  <label>A (1/L):&nbsp;
+                    <input type="number" step="0.001"
+                      value={dose > 0 ? (dose/Math.max(Vd,1e-9)) : ""}
+                      onChange={()=>{}}
+                      disabled
+                      title="Derived from Dose/Vd (edit Vd/kel in micro form)"
+                      style={{width:110}}/>
+                  </label>
+                  &nbsp;
+                  <label>α (1/h):&nbsp;
+                    <input type="number" step="0.001"
+                      value={kel}
+                      onChange={()=>{}}
+                      disabled
+                      title="α equals kel (edit kel in micro form)"
+                      style={{width:110}}/>
+                  </label>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Two-compartment parameters */}
+          {selectedModel === "two" && (mode === "simulate" || showSeeds) && (
             <>
               <div className="input-row">
-                <label>k₁₀:&nbsp;
+                <label>Form:&nbsp;
+                  <select value={paramMode} onChange={e => setParamMode(e.target.value)}>
+                    <option value="macro">Macro (A, α, B, β)</option>
+                    <option value="micro">Micro (k10, k12, k21, V1)</option>
+                  </select>
+                </label>
+                &nbsp;&nbsp;
+              </div>
+              {paramMode === "macro" ? (
+                <div className="input-row">
+                  <label title="Macro coefficient A (≈ 1/L for unit dose)">A (1/L):&nbsp;
+                    <input type="number" value={A} onChange={e=>setA(parseFloat(e.target.value))} style={{width:90}}/>
+                  </label>
+                  &nbsp;
+                  <label title="Macro rate α (1/h)">α (1/h):&nbsp;
+                    <input type="number" min="0.05" max="5" step="0.01"
+                      value={alpha} onChange={e=>setAlpha(parseFloat(e.target.value))} style={{width:90}}/>
+                  </label>
+                  &nbsp;
+                  <label title="Macro coefficient B (≈ 1/L for unit dose)">B (1/L):&nbsp;
+                    <input type="number" value={B} onChange={e=>setB(parseFloat(e.target.value))} style={{width:90}}/>
+                  </label>
+                  &nbsp;
+                  <label title="Macro rate β (1/h)">β (1/h):&nbsp;
+                    <input type="number" min="0.01" max="2" step="0.01"
+                      value={beta} onChange={e=>setBeta(parseFloat(e.target.value))} style={{width:90}}/>
+                  </label>
+                </div>
+              ) : (
+                <div className="input-row">
+                  <label>k₁₀:&nbsp;                  
                   <input
                     type="number"
                     value={k10}
@@ -722,6 +998,7 @@ const onDrop = useCallback(async (files) => {
                   />
                 </label>
               </div>
+              )}
               <div className="input-row">
                 <label>V₁:&nbsp;
                   <input
@@ -744,31 +1021,102 @@ const onDrop = useCallback(async (files) => {
             </>
           )}
 
-          {selectedModel === "three" && (
+          {/* Only show on Two-comp */}
+          {mode === "analyze" && selectedModel === "two" && (
+            <div className="input-row">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={allowDemoteTwo}
+                  onChange={e => setAllowDemoteTwo(e.target.checked)}
+                />
+                &nbsp;Allow demotion (2→1) by AICc & identifiability
+              </label>
+            </div>
+          )}
+
+          {/* Only show on Three-comp */}
+          {mode === "analyze" && selectedModel === "three" && (
+            <div className="input-row">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={allowDemoteThree}
+                  onChange={e => setAllowDemoteThree(e.target.checked)}
+                />
+                &nbsp;Allow demotion (3→2→1) by AICc & rate separation
+              </label>
+            </div>
+          )}
+
+          {selectedModel === "three" && (mode === "simulate" || showSeeds) && (
             <>
+              {/* Advanced seed guesses: controls on separate lines */}
               <div className="input-row">
-                <label> Parametrization:&nbsp;
+                <label>
+                  Form:&nbsp;
                   <select value={paramMode} onChange={e => setParamMode(e.target.value)}>
                     <option value="macro">Macro (A, α, B, β, C, γ)</option>
-                    <option value="micro">Micro (k10, k12, k21, k13, k31, V1)</option>
+                    <option value="micro">Micro (k10, k12, k21, k13, k31, V1…V3)</option>
                   </select>
                 </label>
-                &nbsp;&nbsp;
-                {paramMode === "macro" && (
-                  <label> Use fitted A, α, B, β, C, γ:&nbsp;
-                    <input type="checkbox" checked={useFitThreeMacros}
-                          onChange={e=>setUseFitThreeMacros(e.target.checked)} />
-                  </label>
-                )}
               </div>
+              {mode === "analyze" && showSeeds && (
+                <>
+                  {paramMode === "macro" && (
+                    <div className="input-row">
+                      <label>
+                        Use fitted A, α, B, β, C, γ:&nbsp;
+                        <input
+                          type="checkbox"
+                          checked={useFitThreeMacros}
+                          onChange={e => setUseFitThreeMacros(e.target.checked)}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  <div className="input-row">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={allowDemoteThree}
+                        onChange={e => setAllowDemoteThree(e.target.checked)}
+                      />
+                      &nbsp;Auto-demote to 2-comp if warranted (AICc & rate separation)
+                    </label>
+                  </div>
+                </>
+              )}
+
               {paramMode === "macro" ? (
-                <div className="input-row">
-                  <label>A (1/L):&nbsp;<input type="number" value={A3} onChange={e=>setA3(parseFloat(e.target.value))} style={{width:90}}/></label>&nbsp;
-                  <label>α (1/h):&nbsp;<input type="number" value={alpha3} onChange={e=>setAlpha3(parseFloat(e.target.value))} style={{width:90}}/></label>&nbsp;
-                  <label>B (1/L):&nbsp;<input type="number" value={B3} onChange={e=>setB3(parseFloat(e.target.value))} style={{width:90}}/></label>&nbsp;
-                  <label>β (1/h):&nbsp;<input type="number" value={beta3} onChange={e=>setBeta3(parseFloat(e.target.value))} style={{width:90}}/></label>&nbsp;
-                  <label>C (1/L):&nbsp;<input type="number" value={C3} onChange={e=>setC3(parseFloat(e.target.value))} style={{width:90}}/></label>&nbsp;
-                  <label>γ (1/h):&nbsp;<input type="number" value={gamma3} onChange={e=>setGamma3(parseFloat(e.target.value))} style={{width:90}}/></label>
+                <div
+                  className="input-row"
+                  style={{ display: "flex", flexWrap: "nowrap", gap: 8, overflowX: "auto", alignItems: "center" }}
+                >
+                  <label style={{ whiteSpace: "nowrap" }}>
+                    A (1/L):&nbsp;
+                    <input type="number" value={A3} onChange={e=>setA3(parseFloat(e.target.value))} style={{ width: 90 }} />
+                  </label>
+                  <label style={{ whiteSpace: "nowrap" }}>
+                    α (1/h):&nbsp;
+                    <input type="number" value={alpha3} onChange={e=>setAlpha3(parseFloat(e.target.value))} style={{ width: 90 }} />
+                  </label>
+                  <label style={{ whiteSpace: "nowrap" }}>
+                    B (1/L):&nbsp;
+                    <input type="number" value={B3} onChange={e=>setB3(parseFloat(e.target.value))} style={{ width: 90 }} />
+                  </label>
+                  <label style={{ whiteSpace: "nowrap" }}>
+                    β (1/h):&nbsp;
+                    <input type="number" value={beta3} onChange={e=>setBeta3(parseFloat(e.target.value))} style={{ width: 90 }} />
+                  </label>
+                  <label style={{ whiteSpace: "nowrap" }}>
+                    C (1/L):&nbsp;
+                    <input type="number" value={C3} onChange={e=>setC3(parseFloat(e.target.value))} style={{ width: 90 }} />
+                  </label>
+                  <label style={{ whiteSpace: "nowrap" }}>
+                    γ (1/h):&nbsp;
+                    <input type="number" value={gamma3} onChange={e=>setGamma3(parseFloat(e.target.value))} style={{ width: 90 }} />
+                  </label>
                 </div>
               ) : (
                 <>
@@ -792,21 +1140,24 @@ const onDrop = useCallback(async (files) => {
           )}
 
           {/* File Dropzone */}
-          <div {...getRootProps()} className="dropzone">
-            <input {...getInputProps()} />
-            <p>Drag &amp; drop CSV/Excel here, or click to select</p>
-          </div>
+          {mode === "analyze" && (
+            <div {...getRootProps()} className="dropzone">
+              <input {...getInputProps()} />
+              <p>Drag &amp; drop CSV/Excel here, or click to select</p>
+            </div>
+          )}
 
-          {warnings.length > 0 && (
+          {mode === "analyze" && (warnings.length > 0 || mergeNote) && (
             <div className="warnings">
-              {warnings.map((w, i) => (
+               {[...new Set(warnings)].map((w, i) => (  
                 <div key={i}>{w}</div>
               ))}
+               {mergeNote && <div>{mergeNote}</div>}
             </div>
           )}
 
           {/* Preview + Buttons */}
-          {data.length > 0 && (
+          {mode === "analyze" && data.length > 0 && (
             <div className="preview-section">
               <h3>Data Preview</h3>
               <table className="preview-table">
@@ -828,20 +1179,42 @@ const onDrop = useCallback(async (files) => {
                 </tbody>
               </table>
               <div className="buttons">
-                <button onClick={runFit}>
-                  {selectedModel === "one"
-                    ? "Fit One-Compartment"
-                    : selectedModel === "two"
-                    ? "Fit Two-Compartment"
-                    : "Fit Three-Compartment"}
-                </button>
+                {mode === "analyze" && (
+                  <button onClick={runFit}>
+                    {selectedModel === "one"
+                      ? "Fit One-Compartment"
+                      : selectedModel === "two"
+                      ? "Fit Two-Compartment"
+                      : "Fit Three-Compartment"}
+                  </button>
+                )}
                 <button onClick={downloadReport}>
                   Download PDF Report
                 </button>
               </div>
+              {/* Analyze-only: selection diagnostics badges (3c only) */}
+              {mode === "analyze" && selectedModel === "three" && Array.isArray(fitParams) && fitParams.length > 0 && (
+                <div className="badges" style={{marginTop:10}}>
+                  {(() => {
+                    const first = fitParams[0];
+                    const sd = first.selection_diag || {};
+                    const n  = sd.n ?? first.n ?? (rawData?.length || 0);
+                    return (
+                      <>
+                        {"delta" in sd && <span className="badge">ΔAICc: {fmt(sd.delta, 2)}</span>}
+                        {"sep_rel" in sd && <span className="badge">sep_rel: {fmt(sd.sep_rel, 3)}</span>}
+                        <span className="badge">n: {n}</span>
+                        {sd.demoted && <span className="badge badge-warn">Demoted ({sd.reason || "rule"})</span>}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           )}
 
+          {/* Simulation UI is only shown in Simulate mode */}
+          {mode === "simulate" && (
           <div className="preview-section">
             <h3>
               {selectedModel === "one" ? "Route Explorer (One-Compartment)"
@@ -895,35 +1268,6 @@ const onDrop = useCallback(async (files) => {
                 </select>
               </label>
               &nbsp;&nbsp;
-              {selectedModel === "one" ? (
-                <label>
-                  Use fitted Vd, kel:&nbsp;
-                  <input
-                    type="checkbox"
-                    checked={useFitParams}
-                    onChange={e => setUseFitParams(e.target.checked)}
-                  />
-                </label>
-              ) : selectedModel === "two" ? (
-                <>
-                  <label> Parametrization:&nbsp;
-                    <select value={paramMode} onChange={e => setParamMode(e.target.value)}>
-                      <option value="macro">Macro (A, α, B, β)</option>
-                      <option value="micro">Micro (k10, k12, k21, V1)</option>
-                    </select>
-                  </label>
-                  &nbsp;&nbsp;
-                  {paramMode === "macro" && (
-                    <label> Use fitted A, α, B, β:&nbsp;
-                      <input
-                        type="checkbox"
-                        checked={useFitTwoMacros}
-                        onChange={e => setUseFitTwoMacros(e.target.checked)}
-                      />
-                    </label>
-                  )}
-                </>
-              ) : null}
             </div>
 
             {selectedModel === "one" ? (
@@ -1236,59 +1580,87 @@ const onDrop = useCallback(async (files) => {
               <div className="results">
                 <h4>Simulation</h4>
                 <div className="kpis">
-                  <div className="kpi">Cmax: <strong>{sim.summary.Cmax.toFixed(3)}</strong></div>
-                  <div className="kpi">Tmax (h): <strong>{sim.summary.Tmax.toFixed(3)}</strong></div>
-                  <div className="kpi">AUC (0–t_end): <strong>{sim.summary.AUC.toFixed(3)}</strong></div>
-                  {"Cmax_ss" in sim.summary && (
-                    <div className="kpi">Cmax_ss: <strong>{sim.summary.Cmax_ss.toFixed(3)}</strong></div>
+                  <div className="kpi">Cmax: <strong>{fmt(sim.summary?.Cmax, 3)}</strong></div>
+                  <div className="kpi">Tmax (h): <strong>{fmt(sim.summary?.Tmax, 3)}</strong></div>
+                  <div className="kpi">AUC (0–t_end): <strong>{fmt(sim.summary?.AUC, 3)}</strong></div>
+                  {"Cmax_ss" in (sim.summary || {}) && (
+                    <div className="kpi">Cmax_ss: <strong>{fmt(sim.summary?.Cmax_ss, 3)}</strong></div>
                   )}
-                  {"Cmin_ss" in sim.summary && (
-                    <div className="kpi">Cmin_ss: <strong>{sim.summary.Cmin_ss.toFixed(3)}</strong></div>
+                  {"Cmin_ss" in (sim.summary || {}) && (
+                    <div className="kpi">Cmin_ss: <strong>{fmt(sim.summary?.Cmin_ss, 3)}</strong></div>
                   )}
-                  {"Cavg_ss" in sim.summary && (
-                    <div className="kpi">Cavg_ss: <strong>{sim.summary.Cavg_ss.toFixed(3)}</strong></div>
+                  {"Cavg_ss" in (sim.summary || {}) && (
+                    <div className="kpi">Cavg_ss: <strong>{fmt(sim.summary?.Cavg_ss, 3)}</strong></div>
                   )}
                 </div>
                 <Plot time={sim.time} conc={sim.conc} dosing={sim.dosing} />
               </div>
             )}
           </div>
+          )}
 
           {/* Results */}
-          {Array.isArray(fitParams) &&
-            fitParams.map((r) => (
+          {mode === "analyze" && Array.isArray(fitParams) &&
+            fitParams.map((r) => {
+              const demotedToOne = r.note?.includes("Auto-demoted to 1-comp");
+              const demotedToTwo = r.note?.includes("Auto-demoted to 2-comp");
+              const modelForRow = demotedToOne ? "one" : (demotedToTwo ? "two" : selectedModel);
+              // Fallbacks for AICc & deltas
+              const aicc  = r.gof?.AICc ?? r.selection_diag?.AICc3 ?? r.selection_diag?.AICc2 ?? r.selection_diag?.AICc1;
+              const delta = r.selection_diag?.delta ?? r.selection_diag?.delta21;
+              const nSel  = r.selection_diag?.n ?? r.n;
+              return (
               <div key={r.subject} className="results">
                 <h4>Subject {r.subject}</h4>
                 <ul>
-                  {selectedModel === "one" ? (
+                  {modelForRow === "one" ? (
                     <>
-                      <li>Vd = {r.fit.Vd.toFixed(3)}</li>
-                      <li>kel = {r.fit.kel.toFixed(3)}</li>
+                      <li>Vd = {fmt(r.fit?.Vd, 3)}</li>
+                      <li>kel = {fmt(r.fit?.kel, 3)}</li>
                     </>
                   ) : (
-                  selectedModel === "two" ? (
+                  modelForRow === "two" ? (
                     <>
-                      <li>A = {r.fit.A.toFixed(3)}</li>
-                      <li>α = {r.fit.alpha.toFixed(3)}</li>
-                      <li>B = {r.fit.B.toFixed(3)}</li>
-                      <li>β = {r.fit.beta.toFixed(3)}</li>
+                      <li>A = {fmt(r.fit?.A, 3)}</li>
+                      <li>α = {fmt(r.fit?.alpha, 3)}</li>
+                      <li>B = {fmt(r.fit?.B, 3)}</li>
+                      <li>β = {fmt(r.fit?.beta, 3)}</li>
                     </>
                   ) : (
                     <>
-                      <li>A = {r.fit.A.toFixed(3)}</li>
-                      <li>α = {r.fit.alpha.toFixed(3)}</li>
-                      <li>B = {r.fit.B.toFixed(3)}</li>
-                      <li>β = {r.fit.beta.toFixed(3)}</li>
-                      <li>C = {r.fit.C.toFixed(3)}</li>
-                      <li>γ = {r.fit.gamma.toFixed(3)}</li>
+                      <li>A = {fmt(r.fit?.A, 3)}</li>
+                      <li>α = {fmt(r.fit?.alpha, 3)}</li>
+                      <li>B = {fmt(r.fit?.B, 3)}</li>
+                      <li>β = {fmt(r.fit?.beta, 3)}</li>
+                      <li>C = {fmt(r.fit?.C, 3)}</li>
+                      <li>γ = {fmt(r.fit?.gamma, 3)}</li>
                     </>
                   )
                   )}
-                  <li>R² = {r.gof.R2.toFixed(3)}</li>
-                  <li>AIC = {r.gof.AIC.toFixed(1)}</li>
+                  <li>R² = {fmt(r.gof?.R2, 3)}</li>
+                  <li>AIC = {fmt(r.gof?.AIC, 1)}</li>
+                  <li>AICc = {fmt(aicc, 2)}</li>
+                  {"selection_diag" in r && r.selection_diag && (
+                    <>
+                      {("delta" in r.selection_diag || "delta21" in r.selection_diag) && (
+                        <li>ΔAICc = {fmt(delta, 2)}</li>
+                      )}
+                      {"sep_rel" in r.selection_diag && (
+                        <li>sep_rel = {fmt(r.selection_diag?.sep_rel, 3)}</li>
+                      )}
+                      {"sep_rel2" in r.selection_diag && (
+                        <li>sep_rel (2c) = {fmt(r.selection_diag?.sep_rel2, 3)}</li>
+                      )}
+                      {"B_rel" in r.selection_diag && (
+                        <li>B_rel = {fmt(r.selection_diag?.B_rel, 3)}</li>
+                      )}
+                      <li>n = {nSel}</li>
+                      {r.selection_diag?.demoted && <li>Demoted: {r.selection_diag?.reason}</li>}
+                    </>
+                  )}
                 </ul>
               </div>
-            ))}
+            )})}
         </>
       )}
     </div>

@@ -57,6 +57,38 @@ h1 {
   font-size: 1rem;
 }
 
+.mode-switch label {
+  margin-right: 12px;
+}
+
+.note {
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  color: #1e3a8a;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 0.85rem;
+}
+
+.badge-warn {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 0.85rem;
+}
 
 .preview-section {
   margin-top: 20px;

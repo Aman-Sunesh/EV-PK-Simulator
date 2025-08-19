@@ -422,8 +422,7 @@ const onDrop = useCallback(async (files) => {
     } else if (selectedModel === "three") {
       if (paramMode === "macro") {
         if (!(alpha3 > 0 && beta3 > 0 && gamma3 > 0)) errs.push("α, β, γ must be > 0");
-        const maxr = Math.max(alpha3, beta3, gamma3 || 1);
-
+        const maxr = Math.max(alpha3 || 0, beta3 || 0, gamma3 || 0) || 1;
       } else {
         if (!(k103 > 0 && k123 > 0 && k213 > 0 && k133 > 0 && k313 > 0)) errs.push("All k's must be > 0");
         if (!(V13 > 0 && V23 > 0 && V33 > 0)) errs.push("V1, V2, V3 must be > 0");
@@ -701,7 +700,7 @@ const onDrop = useCallback(async (files) => {
           {rxRoute === "iv_bolus" && "Route: IV bolus"}
           {rxRoute === "iv_infusion" && "Route: IV infusion"}
           {rxRoute === "oral" && `Route: Oral (F=${fmt(F, 2)}, ka=${fmt(ka, 2)} 1/h)`}
-          {rxRoute === "sc" && `Route: SC (F=${fmt(ka, 2)}, ka=${fmt(ka, 2)} 1/h)`}
+          {rxRoute === "sc" && `Route: SC (F=${fmt(F, 2)}, ka=${fmt(ka, 2)} 1/h)`}
         </text>
 
         {/* infusion legend swatch */}
@@ -1204,7 +1203,9 @@ const onDrop = useCallback(async (files) => {
                         {"delta" in sd && <span className="badge">ΔAICc: {fmt(sd.delta, 2)}</span>}
                         {"sep_rel" in sd && <span className="badge">sep_rel: {fmt(sd.sep_rel, 3)}</span>}
                         <span className="badge">n: {n}</span>
-                        {sd.demoted && <span className="badge badge-warn">Demoted ({sd.reason || "rule"})</span>}
+                        {Boolean(sd.demoted) ? (
+                          <span className="badge badge-warn">Demoted ({sd.reason || 'by rule'})</span>
+                        ) : null}                        
                       </>
                     );
                   })()}
@@ -1655,7 +1656,9 @@ const onDrop = useCallback(async (files) => {
                         <li>B_rel = {fmt(r.selection_diag?.B_rel, 3)}</li>
                       )}
                       <li>n = {nSel}</li>
-                      {r.selection_diag?.demoted && <li>Demoted: {r.selection_diag?.reason}</li>}
+                      {Boolean(r.selection_diag?.demoted)
+                        ? <li>Demoted: {r.selection_diag?.reason || 'by rule'}</li>
+                        : null}
                     </>
                   )}
                 </ul>

@@ -74,6 +74,23 @@ def _aicc_from_resid(resid, n, k):
     aic = n * np.log(sse / n) + 2 * k
     return aic + (2 * k * (k + 1)) / (n - k - 1)
 
+def _json_safe(obj):
+    """Recursively replace NaN/±Inf with None; convert numpy scalars/arrays to JSONable types."""
+    import numpy as np
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return _json_safe(obj.tolist())
+    # floats (numpy or python)
+    if isinstance(obj, (float, np.floating)):
+        return float(obj) if np.isfinite(obj) else None
+    # ints (numpy or python)
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    return obj
+
 # allow cross-origin in development
 app.add_middleware(
     CORSMiddleware,
@@ -115,12 +132,12 @@ async def upload_csv(file: UploadFile = File(...)):
     preview = df.head().to_dict(orient="records")
     full = df.to_dict(orient="records")
 
-    return {
+    return _json_safe({
       "preview": preview,
      "data": full,
       "warnings": warnings,
       "hasDose": "dose" in df.columns
-    }
+    })
 
 @app.get("/studies")
 async def list_studies():
@@ -219,7 +236,7 @@ async def fit_one(payload: dict):
             "n":         int(len(t))
         })
 
-    return {"results": results}
+    return _json_safe({"results": results})
 
 @app.post("/fit/two_compartment")
 async def fit_two(payload: dict):
@@ -317,7 +334,7 @@ async def fit_two(payload: dict):
                    if (not allow_demote and propose_demote) else {})
             })
 
-    return {"results": results}
+    return _json_safe({"results": results})
 
 @app.post("/fit/three_compartment")
 async def fit_three(payload: dict):
@@ -373,28 +390,38 @@ async def fit_three(payload: dict):
         except Exception:
             fit2, gof2, AICc2 = None, None, float('inf')
 
-        # AICc(3c)
-        AICc3 = gof3.get("AICc")
-        if AICc3 is None or not np.isfinite(AICc3):
-            k3 = 6
-            AICc3 = gof3["AIC"] + (2*k3*(k3+1))/max(n - k3 - 1, 1) if n > (k3 + 1) else float('inf')
-
-        # optional log-scale AICc override
+        # Recompute AICc for BOTH models under the chosen criterion
+        eps   = 1e-12
+        AICc3 = float("inf")
+        AICc2 = float("inf") if fit2 is None else AICc2
         if crit == "aicc_log":
-            eps = 1e-12
             try:
                 Cp3 = _pred_3c_macro(t, fit3)
-                r3 = np.log(np.maximum(C, eps)) - np.log(np.maximum(Cp3, eps))
+                r3  = np.log(np.maximum(C, eps)) - np.log(np.maximum(Cp3, eps))
                 AICc3 = _aicc_from_resid(r3, n, 6)
             except Exception:
-                pass
+                AICc3 = float("inf")
             if fit2 is not None:
                 try:
                     Cp2 = _pred_2c_macro(t, fit2)
-                    r2 = np.log(np.maximum(C, eps)) - np.log(np.maximum(Cp2, eps))
+                    r2  = np.log(np.maximum(C, eps)) - np.log(np.maximum(Cp2, eps))
                     AICc2 = _aicc_from_resid(r2, n, 4)
                 except Exception:
-                    pass
+                    AICc2 = float("inf")
+        else:  # aicc_linear
+            try:
+                Cp3 = _pred_3c_macro(t, fit3)
+                r3  = C - Cp3
+                AICc3 = _aicc_from_resid(r3, n, 6)
+            except Exception:
+                AICc3 = float("inf")
+            if fit2 is not None:
+                try:
+                    Cp2 = _pred_2c_macro(t, fit2)
+                    r2  = C - Cp2
+                    AICc2 = _aicc_from_resid(r2, n, 4)
+                except Exception:
+                    AICc2 = float("inf")
 
         # Also fit 1c for possible cascade demotion
         fit1 = fit_one_compartment(t, C, dose_i)
@@ -489,7 +516,7 @@ async def fit_three(payload: dict):
                 "n": int(n),
                 "selection_diag": {**selection_diag, "AICc1": float(AICc1), "demoted": False}
             })
-    return {"results": results}
+    return _json_safe({"results": results})
 
 @app.post("/report")
 async def create_report(payload: dict = Body(...)):
@@ -532,7 +559,10 @@ async def create_report(payload: dict = Body(...)):
         if "dose" in grp.columns:
             dose_sub = float(grp["dose"].iloc[0])
         else:
-            dose_sub = float(payload["metadata"]["dose"])
+            md_safe = payload.get("metadata", {})
+            if "dose" not in md_safe:
+                raise HTTPException(status_code=400, detail="Missing 'dose' in metadata or data column.")
+            dose_sub = float(md_safe["dose"])
 
         # fit + PK + GOF + plot (branch by model)
         if model == "two":
@@ -563,35 +593,61 @@ async def create_report(payload: dict = Body(...)):
                 if len(t_sub) < 7:
                     raise RuntimeError("Too few points for a stable three-compartment fit; using 2c.")
 
-                # --- fit 3-comp and compute GOF on log-scale ---
+                # selection settings
+                md = payload["metadata"]
+                crit = str(md.get("criterion", "AICc_linear")).lower()   # "aicc_linear" | "aicc_log"
+                delta_keep = float(md.get("deltaAICc", 2.0))
+                sep_min    = float(md.get("sep_rel_min", 0.05))
+                tail_min   = float(md.get("tail_auc_min", 0.08))
+                allow_demote = bool(md.get("allow_demote", True))
+                force_three = bool(md.get("force_three", False)) or (not allow_demote)
+
+                # --- fit 3-comp and compute GOF ---
                 fit3 = fit_three_compartment(t_sub, C_sub, dose_sub)
                 gof3 = compute_gof_three(t_sub, C_sub, fit3)
 
                 # --- also fit 2-comp for model selection guardrail ---
-                fit2 = fit_two_compartment(t_sub, C_sub, dose_sub)
-                gof2 = compute_gof_two(t_sub, C_sub, fit2)
+                try:
+                    fit2 = fit_two_compartment(t_sub, C_sub, dose_sub)
+                    gof2 = compute_gof_two(t_sub, C_sub, fit2)
+                except Exception:
+                    fit2, gof2 = None, None  # fall back to 3c-only comparison below
 
-                # --- AICc and rate-separation checks ---
+                # AICc and rate-separation checks (driven by criterion) 
                 n = len(t_sub); k2, k3 = 4, 6
-                AICc2 = gof2["AIC"] + (2*k2*(k2+1))/max(n - k2 - 1, 1) if n > (k2 + 1) else float('inf')
-                AICc3 = gof3.get("AICc")
-                if AICc3 is None or not np.isfinite(AICc3):
-                    AICc3 = gof3["AIC"] + (2*k3*(k3+1))/max(n - k3 - 1, 1) if n > (k3 + 1) else float('inf')
+                eps = 1e-12
+
+                # 3c AICc
+                Cp3 = _pred_3c_macro(t_sub, fit3)
+                if crit == "aicc_log":
+                    r3 = np.log(np.maximum(C_sub, eps)) - np.log(np.maximum(Cp3, eps))
+                else:
+                    r3 = C_sub - Cp3
+                AICc3 = _aicc_from_resid(r3, n, k3)
+
+                # 2c AICc (only if the 2c fit succeeded)
+                if fit2 is not None:
+                    Cp2 = _pred_2c_macro(t_sub, fit2)
+                    if crit == "aicc_log":
+                        r2 = np.log(np.maximum(C_sub, eps)) - np.log(np.maximum(Cp2, eps))
+                    else:
+                        r2 = C_sub - Cp2
+                    AICc2 = _aicc_from_resid(r2, n, k2)
+                else:
+                    AICc2 = float("inf")
                     
                 sep_log   = float(gof3.get("rate_sep_log", np.nan))
                 tail_frac = float(gof3.get("tail_auc_frac", np.nan))
                 bad_sep   = (not np.isfinite(sep_log)) or (sep_log < np.log(1.5))
-                weak_tail = (not np.isfinite(tail_frac)) or (tail_frac < 0.08)
+                weak_tail = (not np.isfinite(tail_frac)) or (tail_frac < tail_min)
                 sep_rel = float(gof3.get("rate_sep_rel", 0.0))
 
-                # demotion rule: only demote when the below conditions are true
-                use_two = (n < 8) or ((sep_rel < 0.05) and not (AICc3 + 2 < AICc2))
-    
-                # Honor user preference from metadata (default True = allow demotion)
-                md = payload["metadata"]
-                allow_demote = bool(md.get("allow_demote", True))
-                
-                if not allow_demote and use_two:
+                # demotion rule: MATCH /fit/three_compartment
+                use_two = (n < 8) or (((sep_rel < sep_min) or bad_sep or weak_tail)
+                                       and not (AICc3 + delta_keep < AICc2))
+
+                # Honor user preference
+                if force_three and use_two:
                     elems.append(Paragraph(
                         f"Note: Auto-demotion disabled by user; keeping three-compartment.",
                         styles["Italic"]))
@@ -604,15 +660,19 @@ async def create_report(payload: dict = Body(...)):
                     "delta": float(AICc3 - AICc2),  # 3c − 2c (negative favors 3c)
                     "sep_rel": float(sep_rel),
                     "n": int(n),
+                    "criterion": crit,
+                    "delta_keep": float(delta_keep),
+                    "sep_rel_min": float(sep_min),
+                    "tail_auc_min": float(tail_min),
                     "demoted": bool(use_two),
                 }
 
-                md = payload["metadata"]
                 if use_two:
                     mdl_for_page = "two"
                     elems.append(Paragraph(
                         f"Note: Auto-demoted to two-compartment for Subject {subj} "
-                        f"(ΔAICc<2 and/or poor rate separation or n<8).", styles["Italic"]))
+                        f"(ΔAICc<{delta_keep:g} and/or poor 3c rate separation / weak tail or n<8).",
+                        styles["Italic"]))
                     elems.append(Spacer(1, 6))
 
                     fit = fit2
@@ -796,7 +856,10 @@ async def create_report(payload: dict = Body(...)):
         elems.append(Spacer(1, 12))
 
         if selection_diag is not None:
+            crit_label = selection_diag.get("criterion", "aicc_log")
+            crit_pretty = "AICc (log)" if crit_label == "aicc_log" else "AICc (linear)"
             diag_rows = [
+                ["Criterion", crit_pretty],
                 ["AICc (2c)", f"{selection_diag['AICc2']:.2f}"],
                 ["AICc (3c)", f"{selection_diag['AICc3']:.2f}"],
                 ["ΔAICc (3c − 2c)", f"{selection_diag['delta']:.2f}"],
@@ -1067,7 +1130,7 @@ async def simulate_pk(payload: dict = Body(...)):
 
     if fit_info:
         result["fit_from_data"] = fit_info
-    return result
+    return _json_safe(result)
 
 def _run_what_if(payload: dict) -> Dict:
     model  = payload.get("model", "1c")
@@ -1131,7 +1194,7 @@ def _run_what_if(payload: dict) -> Dict:
 
 @app.post("/what_if")
 async def what_if(payload: dict = Body(...)):
-    return _run_what_if(payload)
+    return _json_safe(_run_what_if(payload))
 
 @app.post("/what_if_batch")
 async def what_if_batch(payload: dict = Body(...)):
@@ -1152,7 +1215,7 @@ async def what_if_batch(payload: dict = Body(...)):
             out.append({"label": label, "ok": False, "error": e.detail})
         except Exception as e:
             out.append({"label": label, "ok": False, "error": str(e)})
-    return {"results": out}
+    return _json_safe({"results": out})
 
 def _sim(model: str, route: str, params: Dict, dosing, repeat, program, t_end: float, dt: float) -> Dict:
     """
@@ -1231,7 +1294,7 @@ async def uncertainty(payload: dict = Body(...)):
         except Exception:
             pass
 
-    return {"fit": fit, "uq": out, "summary": summary}
+    return _json_safe({"fit": fit, "uq": out, "summary": summary})
 
 # ---------- Sensitivity Analysis ----------
 @app.post("/sensitivity")
@@ -1257,7 +1320,7 @@ async def sensitivity(payload: dict = Body(...)):
     else:
         raise HTTPException(status_code=400, detail="method must be 'local', 'prcc' or 'sobol'")
 
-    return out
+    return _json_safe(out)
 
 # ---------- Diagnostics (VPC & residuals) ----------
 @app.post("/diagnostics")
@@ -1290,11 +1353,11 @@ async def diagnostics(payload: dict = Body(...)):
     res_b64 = base64.b64encode(buf_res.getvalue()).decode("ascii")
     vpc_b64 = base64.b64encode(buf_vpc.getvalue()).decode("ascii")
 
-    return {
+    return _json_safe({
         "fit": fit,
         "residuals_png_b64": res_b64,
         "vpc_png_b64": vpc_b64
-    }
+    })
 
 @app.post("/simulate_pk_batch")
 async def simulate_pk_batch(payload: dict = Body(...)):
@@ -1322,7 +1385,7 @@ async def simulate_pk_batch(payload: dict = Body(...)):
             out.append({"label": label, "ok": True, "result": res})
         except Exception as e:
             out.append({"label": label, "ok": False, "error": str(e)})
-    return {"results": out}
+    return _json_safe({"results": out})
 
 # ---------- Virtual Trial ----------
 @app.post("/virtual_trial")
@@ -1363,4 +1426,4 @@ async def virtual_trial(payload: dict = Body(...)):
     p50 = np.percentile(M, 50, axis=0).tolist()
     p95 = np.percentile(M, 95, axis=0).tolist()
 
-    return {"time": t_ref.tolist(), "p05": p05, "median": p50, "p95": p95}
+    return _json_safe({"time": t_ref.tolist(), "p05": p05, "median": p50, "p95": p95})

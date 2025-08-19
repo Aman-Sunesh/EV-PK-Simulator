@@ -22,12 +22,13 @@ def _softmax3(z):
     return e / np.sum(e)
 
 def _unpack_params(p):
-    # p = [logC0, a1, a2, a3, z1, z2, z3]
-    logC0, a1, a2, a3, z1, z2, z3 = p
-    alpha = _softplus(a1) + 1e-4
-    beta  = alpha + _softplus(a2)
-    gamma = beta  + _softplus(a3)
-    s1, s2, s3 = _softmax3([z1, z2, z3])
+    # p = [logC0, a1, a2, a3, z1, z2]  (two logits; z3 fixed at 0)
+    logC0, a1, a2, a3, z1, z2 = p
+    MIN_GAP = 1e-3  # enforce small separation between rates
+    alpha = _softplus(a1) + MIN_GAP
+    beta  = alpha + MIN_GAP + _softplus(a2)
+    gamma = beta  + MIN_GAP + _softplus(a3)
+    s1, s2, s3 = _softmax3([z1, z2, 0.0])
     C0 = np.exp(logC0)
     A = C0 * s1; B = C0 * s2; Cc = C0 * s3
     return C0, A, alpha, B, beta, Cc, gamma
@@ -87,12 +88,18 @@ def fit_three_compartment(
     if A0 is None or B0 is None or C0_ is None:
         A0, B0, C0_ = 0.5*C0_guess, 0.35*C0_guess, 0.15*C0_guess
 
+    rng = np.random.default_rng(12345)
+
     def _seed(a_s, b_s, g_s, w=(0.6,0.3,0.1)):
-        z = np.log(np.array(w, float))
+        # rates are enforced as: alpha>0, beta=alpha+..., gamma=beta+...
         a1 = _softplus_inv(max(a_s - 1e-4, 1e-6))
         a2 = _softplus_inv(max(b_s - max(a_s,1e-4), 1e-6))
         a3 = _softplus_inv(max(g_s - max(b_s,1e-4), 1e-6))
-        return np.array([np.log(C0_guess), a1, a2, a3, z[0], z[1], z[2]], float)
+        # two-logit amplitudes, anchor third at 0: z1=log(w1/w3), z2=log(w2/w3)
+        w = np.asarray(w, float); w = np.clip(w, 1e-9, 1.0); w = w/np.sum(w)
+        z1 = np.log(w[0]) - np.log(w[2])
+        z2 = np.log(w[1]) - np.log(w[2])
+        return np.array([np.log(C0_guess), a1, a2, a3, z1, z2], float)
 
     starts = [
         _seed(alpha0,        beta0,        gamma0,        (0.60,0.30,0.10)),
@@ -100,6 +107,14 @@ def fit_three_compartment(
         _seed(alpha0*0.8,    beta0*1.2,    gamma0*1.2,    (0.40,0.40,0.20)),
         _seed(alpha0*2.0,    beta0,        gamma0*0.5,    (0.70,0.20,0.10)),
     ]
+
+    # Extra randomized multi-starts to reduce sticky fits
+    for _ in range(8):
+        a_s = alpha0 * rng.lognormal(0.0, 0.4)
+        b_s = a_s   + abs(beta0  * rng.lognormal(0.0, 0.4))
+        g_s = b_s   + abs(gamma0 * rng.lognormal(0.0, 0.4))
+        w   = rng.dirichlet([3.0, 2.0, 1.5])
+        starts.append(_seed(a_s, b_s, g_s, w=tuple(w)))
 
     eps = 1e-9
     y = np.log(C + eps)
@@ -223,7 +238,7 @@ def compute_gof_three(t: np.ndarray, C: np.ndarray, fit: dict) -> dict:
     ss_tot = float(np.sum((y - np.mean(y))**2))
     r2_log = 1.0 - ss_res/ss_tot if ss_tot > 0 else np.nan
 
-    n = y.size; k = 7
+    n = y.size; k = 6
     sigma2 = ss_res / max(n,1)
     AIC  = n*np.log(max(sigma2, 1e-300)) + 2*k
     AICc = AIC + (2*k*(k+1))/(max(n - k - 1, 1)) if n > (k + 1) else float('nan')

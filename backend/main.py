@@ -5,7 +5,7 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Table, TableStyle,
     Image, Spacer, PageBreak
 )
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 import uuid
@@ -199,7 +199,19 @@ async def fit_one(payload: dict):
     groups = df.groupby(subj_col) if subj_col else [("All", df)]
 
     for subj, grp in groups:
-        g = preprocess_data(grp.copy())     # <- use your existing helper
+        g = preprocess_data(grp.copy())
+
+        warns = []
+        if "concentration" in grp.columns:
+            nonpos = int((grp["concentration"] <= 0).sum())
+            nans   = int(grp["concentration"].isna().sum())
+            if (nonpos + nans) > 0:
+                warns.append(f"Non-positive concentrations filtered: {nonpos + nans}")
+        if "time" in grp.columns:
+            dup_t = int(grp.duplicated(subset=["time"]).sum())
+            if dup_t > 0:
+                warns.append(f"Duplicate time rows: {dup_t}")
+
         t = g["time"].values
         C = g["concentration"].values
             
@@ -233,31 +245,47 @@ async def fit_one(payload: dict):
             "fit":       fit,
             "pk_params": pk,
             "gof":       gof,
-            "n":         int(len(t))
+            "n":         int(len(t)),
+            "preprocess_warnings": warns
         })
 
     return _json_safe({"results": results})
 
 @app.post("/fit/two_compartment")
 async def fit_two(payload: dict):
-    df = pd.DataFrame(payload.get("data", []))
-    df = preprocess_data(df)  # normalize and clean     
+    df_raw = pd.DataFrame(payload.get("data", []))
+    df = preprocess_data(df_raw.copy())  # normalize and clean   
     seeds = payload.get("seeds")      
     sel = (payload.get("selection") or {})
     allow_demote = bool(sel.get("allow_demote", True))
-    subj_col = "Subject" if "Subject" in df.columns else ("subject" if "subject" in df.columns else None)  
+    subj_col = "Subject" if "Subject" in df_raw.columns else ("subject" if "subject" in df_raw.columns else None)
     
     results = []
    
     if subj_col:
-        groups = df.groupby(subj_col)
+        groups = df_raw.groupby(subj_col)
     else:
-        groups = [("All", df)]
+        groups = [("All", df_raw)]
 
-    for subj, grp in groups:
+    for subj, grp_raw in groups:
+        warns = []
+
+        if "concentration" in grp_raw.columns:
+            nonpos = int((grp_raw["concentration"] <= 0).sum())
+            nans   = int(grp_raw["concentration"].isna().sum())
+            if (nonpos + nans) > 0:
+                warns.append(f"Non-positive concentrations filtered: {nonpos + nans}")
+
+        if "time" in grp_raw.columns:
+            dup_t = int(grp_raw.duplicated(subset=["time"]).sum())
+            if dup_t > 0:
+                warns.append(f"Duplicate time rows: {dup_t}")
+
+        # fit on CLEANED copy of this subject
+        grp   = preprocess_data(grp_raw.copy())
         t      = grp["time"].values
         C      = grp["concentration"].values
-        dose_i = float(grp["dose"].iloc[0]) if "dose" in grp.columns else float(payload.get("dose", 1.0))
+        dose_i = float(grp_raw["dose"].iloc[0]) if "dose" in grp_raw.columns else float(payload.get("dose", 1.0))
 
         # fit 2c (with optional seeds) 
         try:
@@ -317,6 +345,7 @@ async def fit_two(payload: dict):
                 "gof":       gof1,
                 "n":         int(n),
                 "selection_diag": {**selection_diag, "reason": "ΔAICc<2 vs 1c and/or poor rate separation or tiny B, or n<6."},
+                "preprocess_warnings": warns,
                 "note": "Auto-demoted to 1-comp."
             })
 
@@ -330,6 +359,7 @@ async def fit_two(payload: dict):
                 "gof":       gof2,
                 "n":         int(n),
                 "selection_diag": selection_diag,
+                "preprocess_warnings": warns,
                 **({ "note": "Auto-demotion disabled by user; kept 2-comp." }
                    if (not allow_demote and propose_demote) else {})
             })
@@ -356,6 +386,19 @@ async def fit_three(payload: dict):
     groups = df.groupby(subj_col) if subj_col else [("All", df)]
 
     for subj, grp in groups:
+        warns = []
+
+        if "concentration" in grp.columns:
+            nonpos = int((grp["concentration"] <= 0).sum())
+            nans   = int(grp["concentration"].isna().sum())
+            if (nonpos + nans) > 0:
+                warns.append(f"Non-positive concentrations filtered: {nonpos + nans}")
+
+        if "time" in grp.columns:
+            dup_t = int(grp.duplicated(subset=["time"]).sum())
+            if dup_t > 0:
+                warns.append(f"Duplicate time rows: {dup_t}")
+
         t = grp["time"].values
         C = grp["concentration"].values
         dose_i = float(grp["dose"].iloc[0]) if "dose" in grp.columns else float(payload.get("dose", 1.0))
@@ -485,6 +528,7 @@ async def fit_three(payload: dict):
                         "demoted": True,
                         "reason": "3→2 demotion + 2→1 (ΔAICc<2 vs 1c and/or poor 2c separation/tiny B, or n<6)."
                     },
+                    "preprocess_warnings": warns,
                     "note": "Auto-demoted to 1-comp."
                 })
 
@@ -514,7 +558,8 @@ async def fit_three(payload: dict):
                 "pk_params": pk_params,
                 "gof": gof3,
                 "n": int(n),
-                "selection_diag": {**selection_diag, "AICc1": float(AICc1), "demoted": False}
+                "selection_diag": {**selection_diag, "AICc1": float(AICc1), "demoted": False},
+                "preprocess_warnings": warns
             })
     return _json_safe({"results": results})
 
@@ -541,6 +586,9 @@ async def create_report(payload: dict = Body(...)):
     out_buf  = BytesIO()
     doc      = SimpleDocTemplate(out_buf, pagesize=letter)
     styles   = getSampleStyleSheet()
+    h2_break = ParagraphStyle(
+        "H2Break", parent=styles["Heading2"], keepWithNext=False, spaceAfter=0
+    )
     elems    = []
 
     subj_col = "subject" if "subject" in df.columns else ("Subject" if "Subject" in df.columns else None)
@@ -566,27 +614,83 @@ async def create_report(payload: dict = Body(...)):
 
         # fit + PK + GOF + plot (branch by model)
         if model == "two":
-            fit         = fit_two_compartment(t_sub, C_sub, dose_sub)
-            pk_params   = compute_pk_parameters_two(fit, dose_sub)
-            gof         = compute_gof_two(t_sub, C_sub, fit)
+            # --- Fit both 2c and 1c to support demotion identical to /fit/two_compartment ---
+            fit2       = fit_two_compartment(t_sub, C_sub, dose_sub)
+            gof2       = compute_gof_two(t_sub, C_sub, fit2)
+            n_pts_page = len(t_sub)
+            k2         = 4
+            AICc2      = gof2["AIC"] + (2*k2*(k2+1))/max(n_pts_page - k2 - 1, 1) if n_pts_page > (k2 + 1) else float("inf")
 
-            # only draw mechanistic if all params are present
-            md = payload["metadata"]
+            fit1  = fit_one_compartment(t_sub, C_sub, dose_sub)
+            gof1  = compute_gof(t_sub, C_sub, fit1, dose_sub)
+            k1    = 2
+            AICc1 = gof1["AIC"] + (2*k1*(k1+1))/max(n_pts_page - k1 - 1, 1) if n_pts_page > (k1 + 1) else float("inf")
 
-            # Apply defaults if user didn’t supply mechanistic parameters
-            k10 = float(md.get("k10", 0.1))
-            k12 = float(md.get("k12", 0.2))
-            k21 = float(md.get("k21", 0.05))
-            V1  = float(md.get("V1",  5.0))
-            V2  = float(md.get("V2", 20.0))
+            # Identifiability heuristics (match /fit/two_compartment)
+            A     = float(fit2.get("A", np.nan))
+            B     = float(fit2.get("B", np.nan))
+            alpha = float(fit2.get("alpha", np.nan))
+            beta  = float(fit2.get("beta", np.nan))
+            B_rel    = (abs(B) / max(abs(A) + abs(B), 1e-12)) if np.isfinite(A) and np.isfinite(B) else 0.0
+            sep_rel2 = (abs(alpha - beta) / max(alpha, beta)) if np.isfinite(alpha) and np.isfinite(beta) and max(alpha,beta) > 0 else 0.0
+            allow_demote = bool((payload.get("metadata") or {}).get("allow_demote", True))
 
-            meta_events = payload["metadata"].get("dosing", None)
-            dosing_events = meta_events if meta_events else [{"time": 0.0, "dose": dose_sub, **(
-                {"Tinf": float(payload["metadata"].get("Tinf", 0.0))} if payload["metadata"].get("Tinf") else {}
-            )}]
+            # Propose demotion if thin data OR (degenerate 2c) AND 2c is not better by ≥2 AICc
+            propose_demote = (n_pts_page < 6) or (((B_rel < 0.03) or (sep_rel2 < 0.05)) and not (AICc2 + 2 < AICc1))
+            use_one = allow_demote and propose_demote
 
-            buf_lin, buf_log, buf_mech, buf_dose = plot_fit_two(
-                t_sub, C_sub, fit, k10, k12, k21, V1, V2, dosing=dosing_events)
+            # Record diagnostics for PDF badges/section
+            selection_diag = {
+                "AICc1": float(AICc1),
+                "AICc2": float(AICc2),
+                "delta21": float(AICc2 - AICc1),   # positive ⇒ 1c preferred
+                "sep_rel2": float(sep_rel2),
+                "B_rel": float(B_rel),
+                "n": int(n_pts_page),
+                "allow_demote": bool(allow_demote),
+                "would_demote": bool(propose_demote),
+                "demoted": bool(use_one),
+            }
+
+            if use_one:
+                mdl_for_page = "one"
+                elems.append(Paragraph(
+                    "Note: Auto-demoted to one-compartment "
+                    "(ΔAICc<2 vs 1c and/or poor rate separation or tiny B, or n<6).",
+                    styles["Italic"]))
+                elems.append(Spacer(1, 6))
+
+                fit       = fit1
+                pk_params = compute_pk_parameters(fit1, dose_sub)
+                gof       = {**gof1, "AICc": float(AICc1)}
+
+                meta_events   = payload["metadata"].get("dosing", None)
+                dosing_events = meta_events if meta_events else [{"time": 0.0, "dose": dose_sub, **(
+                    {"Tinf": float(payload["metadata"].get("Tinf", 0.0))} if payload["metadata"].get("Tinf") else {}
+                )}]
+                # 1c plotting (no mechanistic schematic)
+                buf_lin, buf_log, buf_dose = plot_fit(t_sub, C_sub, fit, dose_sub, dosing=dosing_events)
+                buf_mech = None
+            else:
+                mdl_for_page = "two"
+                fit       = fit2
+                pk_params = compute_pk_parameters_two(fit2, dose_sub)
+                gof       = {**gof2, "AICc": float(AICc2)}
+
+                # only draw mechanistic if all params are present
+                md = payload["metadata"]
+                k10 = float(md.get("k10", 0.1))
+                k12 = float(md.get("k12", 0.2))
+                k21 = float(md.get("k21", 0.05))
+                V1  = float(md.get("V1",  5.0))
+                V2  = float(md.get("V2", 20.0))
+
+                meta_events   = payload["metadata"].get("dosing", None)
+                dosing_events = meta_events if meta_events else [{"time": 0.0, "dose": dose_sub, **(
+                    {"Tinf": float(payload["metadata"].get("Tinf", 0.0))} if payload["metadata"].get("Tinf") else {}
+                )}]
+                buf_lin, buf_log, buf_mech, buf_dose = plot_fit_two(
+                    t_sub, C_sub, fit, k10, k12, k21, V1, V2, dosing=dosing_events)
 
         elif model == "three":
             try:
@@ -775,10 +879,59 @@ async def create_report(payload: dict = Body(...)):
         elems.append(tbl)
         elems.append(Spacer(1, 12))
 
-        # Data summary
+        # Data summary (+ KPIs with units)
+        # Units (optional in metadata; defaults sensible for PK)
+        time_units = (payload.get("metadata", {}) or {}).get("time_units", "h")
+        conc_units = (payload.get("metadata", {}) or {}).get("conc_units", "a.u.")
+
+        # Observed n, t_min, t_max
+        n_pts = int(len(df_sub))
+        t_min = float(df_sub.time.min()) if n_pts > 0 else float("nan")
+        t_max = float(df_sub.time.max()) if n_pts > 0 else float("nan")
+
+        # Observed Cmax (based on cleaned data)
+        if n_pts > 0:
+            idx_cmax = int(np.argmax(C_sub))
+            Cmax_obs = float(C_sub[idx_cmax])
+        else:
+            Cmax_obs = float("nan")
+
+        # log-slope on a subset (for half-life and early/late slopes)
+        def _log_slope(t_arr, c_arr):
+            t_arr = np.asarray(t_arr, dtype=float)
+            c_arr = np.asarray(c_arr, dtype=float)
+            m = (np.isfinite(t_arr)) & (np.isfinite(c_arr)) & (c_arr > 0)
+            if m.sum() >= 2:
+                # slope of ln C vs t
+                slope, _ = np.polyfit(t_arr[m], np.log(c_arr[m]), 1)
+                return float(slope)
+            return float("nan")
+
+        # Global log-linear half-life from all positive points
+        m_global = _log_slope(t_sub, C_sub)
+        if np.isfinite(m_global) and m_global < 0:
+            t_half_global = float(np.log(2) / (-m_global))
+        else:
+            t_half_global = None
+
+        # Early vs late log-slope ratio (dimensionless)
+        if np.isfinite(t_min) and np.isfinite(t_max) and t_max > t_min:
+            q_lo, q_hi = np.quantile(t_sub, [0.33, 0.67])
+            me = _log_slope(t_sub[t_sub <= q_lo], C_sub[t_sub <= q_lo])
+            ml = _log_slope(t_sub[t_sub >= q_hi], C_sub[t_sub >= q_hi])
+            if np.isfinite(me) and np.isfinite(ml) and (ml != 0):
+                ml_ratio = float(abs(me) / abs(ml))
+            else:
+                ml_ratio = None
+        else:
+            ml_ratio = None
+
         summary = [
-            ["Number of points", len(df_sub)],
-            ["Time span (min → max)", f"{df_sub.time.min():.2f} → {df_sub.time.max():.2f}"]
+            ["n", n_pts],
+            ["Time span (min → max)", f"{t_min:.2f} → {t_max:.2f} {time_units}"],
+            ["C_max (observed)", f"{Cmax_obs:.3g}" + (f" {conc_units}" if conc_units else "")],
+            ["Global t½ (log-linear)", f"{t_half_global:.2f} {time_units}" if t_half_global is not None else "—"],
+            ["|m_early|/|m_late| (log-slopes)", f"{ml_ratio:.2f}" if ml_ratio is not None else "—"],
         ]
         sum_tbl = Table(summary, hAlign="LEFT")
         sum_tbl.setStyle(TableStyle([("GRID", (0,0),(-1,-1), 0.5, colors.grey)]))
@@ -850,21 +1003,35 @@ async def create_report(payload: dict = Body(...)):
         if "AICc" in gof and np.isfinite(gof["AICc"]):
             gof_data.append(["AICc", f"{gof['AICc']:.1f}"])
         gof_tbl  = Table(gof_data, hAlign="LEFT")
+        gof_tbl.spaceBefore = 20
         gof_tbl.setStyle(TableStyle([("GRID", (0,0),(-1,-1), 0.5, colors.grey)]))
-        elems.append(Paragraph("Goodness-of-Fit", styles["Heading2"]))
+        elems.append(Spacer(1, 20))
+        elems.append(Paragraph("Goodness-of-Fit", h2_break))
         elems.append(gof_tbl)
         elems.append(Spacer(1, 12))
 
         if selection_diag is not None:
-            crit_label = selection_diag.get("criterion", "aicc_log")
-            crit_pretty = "AICc (log)" if crit_label == "aicc_log" else "AICc (linear)"
-            diag_rows = [
-                ["Criterion", crit_pretty],
-                ["AICc (2c)", f"{selection_diag['AICc2']:.2f}"],
-                ["AICc (3c)", f"{selection_diag['AICc3']:.2f}"],
-                ["ΔAICc (3c − 2c)", f"{selection_diag['delta']:.2f}"],
-                ["rate_sep_rel", f"{selection_diag['sep_rel']:.3f}"],
-            ]
+            # 3c vs 2c diagnostics OR 2c vs 1c diagnostics depending on keys present
+            if "AICc3" in selection_diag:
+                crit_label = selection_diag.get("criterion", "aicc_log")
+                crit_pretty = "AICc (log)" if crit_label == "aicc_log" else "AICc (linear)"
+                diag_rows = [
+                    ["Criterion", crit_pretty],
+                    ["AICc (2c)", f"{selection_diag['AICc2']:.2f}"],
+                    ["AICc (3c)", f"{selection_diag['AICc3']:.2f}"],
+                    ["ΔAICc (3c − 2c)", f"{selection_diag['delta']:.2f}"],
+                    ["rate_sep_rel (3c)", f"{selection_diag['sep_rel']:.3f}"],
+                ]
+            else:
+                # two-comp selection diagnostics (2c vs 1c)
+                diag_rows = [
+                    ["AICc (1c)", f"{selection_diag['AICc1']:.2f}"],
+                    ["AICc (2c)", f"{selection_diag['AICc2']:.2f}"],
+                    ["ΔAICc (2c − 1c)", f"{selection_diag['delta21']:.2f}"],
+                    ["sep_rel (2c)", f"{selection_diag['sep_rel2']:.3f}"],
+                    ["B_rel (2c)", f"{selection_diag['B_rel']:.3f}"],
+                    ["Demoted", "Yes" if selection_diag.get("demoted") else "No"],
+                ]
 
             diag_tbl = Table(diag_rows, hAlign="LEFT")
             diag_tbl.setStyle(TableStyle([
@@ -900,13 +1067,14 @@ async def create_report(payload: dict = Body(...)):
         except Exception as _:
             pass
 
-        # Plots: linear & semilog        
+        # Plots: linear & semilog 
+        elems.append(Spacer(1, 30))       
         elems.append(Paragraph("Linear Fit", styles["Heading2"]))
         elems.append(Image(buf_lin, width=400, height=200))
         elems.append(Spacer(1, 12))
         elems.append(Paragraph("Semilog Fit", styles["Heading2"]))
         elems.append(Image(buf_log, width=400, height=200))
-        elems.append(Spacer(1, 12))
+        elems.append(Spacer(1, 160))
         elems.append(Paragraph("Dosing Timeline", styles["Heading2"]))
         elems.append(Image(buf_dose, width=400, height=120))
 

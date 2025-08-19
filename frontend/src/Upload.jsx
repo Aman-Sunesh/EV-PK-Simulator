@@ -263,7 +263,15 @@ const onDrop = useCallback(async (files) => {
         };
       }
       const res = await axios.post(endpoint, body);
-      setFitParams(res.data.results);
+      const fitResults = res.data.results || [];
+      setFitParams(fitResults);
+
+      const pWarns = [...new Set(
+        fitResults.flatMap(r => r.preprocess_warnings || [])
+      )];
+      if (pWarns.length) {
+        setWarnings(prev => [...new Set([...(prev || []), ...pWarns])]);
+      }
     } catch (err) {
       alert("Fit error: " + (err.response?.data?.detail || err.message));
     }
@@ -285,6 +293,8 @@ const onDrop = useCallback(async (files) => {
       route: routeLabel,
       dose,
       model: selectedModel,
+      time_units: "h",
+      conc_units: "a.u.",
       allow_demote: (selectedModel === "three" ? allowDemoteThree
                      : selectedModel === "two"   ? allowDemoteTwo
                      : true), // 1c doesn't demote anyway
@@ -1147,11 +1157,11 @@ const onDrop = useCallback(async (files) => {
           )}
 
           {mode === "analyze" && (warnings.length > 0 || mergeNote) && (
-            <div className="warnings">
-               {[...new Set(warnings)].map((w, i) => (  
-                <div key={i}>{w}</div>
+            <div className="badges" style={{ marginTop: 10 }}>
+              {[...new Set(warnings)].map((w, i) => (
+                <span key={i} className="badge badge-warn">{w}</span>
               ))}
-               {mergeNote && <div>{mergeNote}</div>}
+              {mergeNote && <span className="badge badge-warn">{mergeNote}</span>}
             </div>
           )}
 

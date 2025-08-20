@@ -1,3 +1,22 @@
+# one_compartment_model.py
+#
+# ────────────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator — One-Compartment (IV bolus) Model Utilities
+#
+# What this module provides
+#  • preprocess_data(df): light QC → numeric, sorted, deduped rows
+#  • model_one_comp(t, Vd, kel, dose): C(t) = (dose/Vd)·e^(−kel·t)
+#  • fit_one_compartment(t, C, dose, ...): NLS fit for Vd, kel (+ pcov & 95% CI)
+#  • compute_pk_parameters(fit, dose): Cl, t½, C0, AUC, MRT with SEs & 95% CI
+#  • compute_gof(t, C, fit, dose): R², residual stats, AIC
+#  • plot_fit(...): linear, semilog, and dosing-timeline PNGs (as BytesIO)
+#
+# Notes
+#  • Keep signatures stable; other modules import these symbols directly.
+#  • CIs use a normal 1.96 multiplier; for small n consider t-based intervals.
+#  • The plotting helpers are intentionally minimal and backend-agnostic.
+# ────────────────────────────────────────────────────────────────────────────────────
+
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit

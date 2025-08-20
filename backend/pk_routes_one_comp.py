@@ -1,3 +1,28 @@
+# pk_routes_one_comp.py
+#
+# ────────────────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator — One-Compartment Route Simulator (IV bolus / infusion / oral / SC)
+#
+# What this module provides
+#  • simulate_one_comp_route(route, params, dosing|repeat, t_end, dt) → dict
+#      - Supports: "iv_bolus", "iv_infusion", "oral", "sc"
+#      - Accepts either an explicit `dosing` list or a simple `repeat` rule
+#      - Returns time/conc arrays, summary KPIs (Cmax, Tmax, AUC), and dosing echo
+#
+#  • Internal helpers (kept stable — used by tests & other modules)
+#      _time_grid, _trapz, _expm1_pos, _validate_positive, _validate_nonnegative,
+#      _expand_extravascular_continuous, _iv_bolus_curve, _iv_infusion_curve,
+#      _extravascular_curve, _summarize
+#
+# Notes
+#  • Parameter expectations:
+#      - Common: Vd > 0, kel > 0
+#      - IV infusion: Tinf > 0 (per event or params["Tinf"])
+#      - Oral/SC: F ≥ 0, ka > 0; when an event has Tinf, it is expanded as micro-boluses
+#  • For `repeat`, steady-state summaries are returned when formulas are applicable.
+#  • Behavior is deterministic and vectorized; no random state used.
+# ────────────────────────────────────────────────────────────────────────────────────────
+
 import numpy as np
 from typing import List, Dict, Optional
 

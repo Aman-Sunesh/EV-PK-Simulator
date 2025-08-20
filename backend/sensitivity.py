@@ -1,3 +1,24 @@
+# sensitivity.py
+#
+# ────────────────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator — Sensitivity Analysis Utilities
+#
+# What this module provides
+#  • local_sensitivity(...): normalized local (finite-difference) sensitivities
+#  • global_prcc_sensitivity(...): PRCC-based global sensitivity (Sobol sampling)
+#  • global_sobol_sensitivity(...): Variance-based Sobol indices (Si, STi)
+#
+# Internal helpers
+#  • _sim / _dispatch_sim: run the chosen PK model & route
+#  • _metric / _eval_metric: pull a metric from simulation summaries
+#  • _rank / _prcc: rank transform & partial rank correlation coefficients
+#
+# Notes
+#  • Supports models: "1c", "2c", "3c"
+#  • Supports routes: "iv_bolus", "iv_infusion", "oral", "sc"
+#  • `program` (if provided) is expanded to a dosing list (repeat is ignored).
+# ────────────────────────────────────────────────────────────────────────────────────────
+
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from scipy.stats.qmc import Sobol

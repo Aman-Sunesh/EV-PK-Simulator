@@ -1,3 +1,36 @@
+# main.py
+#
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator API (FastAPI)
+# Endpoints for the full pipeline: ingest → fit → select/demote → report
+# → diagnostics/UQ/sensitivity → simulation (single/batch/virtual trial).
+#
+# Features / responsibilities
+#  • Upload & studies:
+#      - /upload: parse CSV/XLSX, normalize columns, preview + warnings
+#      - /studies, /studies/{id}: small manifest-driven dataset fetcher
+#  • Fitting (macro + derived PK) with demotion guardrails:
+#      - /fit/one_compartment
+#      - /fit/two_compartment   (AICc + identifiability checks; optional demotion 2→1)
+#      - /fit/three_compartment (AICc[linear|log], rate separation/tail checks; chained 3→2→1)
+#  • Reporting:
+#      - /report: multi-page PDF per subject (metadata, data summary, fit tables,
+#        GOF, selection diagnostics, residuals/VPC, linear/semilog plots, dosing timeline)
+#  • Simulation:
+#      - /simulate_pk (+ batch), /what_if (+ batch), /virtual_trial
+#      - High-level dosing “program” expansion → low-level dosing events
+#  • Diagnostics, UQ, Sensitivity:
+#      - /diagnostics: residuals & VPC
+#      - /uncertainty: bootstrap/MCMC summaries
+#      - /sensitivity: local, PRCC, Sobol
+#
+# Notable implementation details
+#  • JSON-safety: _json_safe(…) sanitizes NaN/Inf & numpy types
+#  • AICc helpers for both linear- and log-scale residuals
+#  • Selection diagnostics surfaced consistently to API & PDF
+#  • PDF layout tuned: spacing, headings, and “demoted” notes/badges
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse

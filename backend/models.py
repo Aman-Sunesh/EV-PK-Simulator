@@ -1,3 +1,25 @@
+# models.py
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator — SQLAlchemy ORM Models
+#
+# Tables
+#  • studies
+#      - Curated/benchmark study metadata and the raw CSV payload.
+#      - Columns: id, doi, species, route, dose, csv_blob
+#  • user_uploads
+#      - Per-user ad-hoc uploads normalized to JSON.
+#      - Columns: id, filename, data (JSON)
+#  • pk_model_results
+#      - Fitted model results keyed to a specific upload.
+#      - Columns: id, upload_id (FK-like), model_type, parameters (JSON)
+#
+# Notes
+#  • Keep this module schema-only (no business logic).
+#  • JSON columns work across backends; on SQLite they’re stored as TEXT.
+#  • Migrations (alembic) should evolve this schema; do not mutate in-place.
+# ──────────────────────────────────────────────────────────────────────────────
+
 import numpy as np
 from sqlalchemy import Column, Integer, String, LargeBinary, JSON
 from sqlalchemy.orm import declarative_base

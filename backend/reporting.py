@@ -1,4 +1,25 @@
-# ReportLab imports for PDF generation
+# reporting.py
+#
+# ────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator — PDF Report Generator (ReportLab)
+#
+# What this module provides
+#  • generate_pdf_report(metadata, df, fit, pk_params, gof,
+#                        plot_buffer_lin, plot_buffer_log, output_path) → str
+#
+#    Builds a compact study report including:
+#      - Study metadata
+#      - Data summary (N points, time span)
+#      - Fit results with 95% CIs (Vd, kel, derived PK: Cl, t½, C0, AUC, MRT)
+#      - Goodness-of-fit metrics (R², AIC)
+#      - Plots (linear & semilog), passed as BytesIO PNGs
+#
+# Notes
+#  • Expects preprocessed df with ['time','concentration'].
+#  • plot_buffer_* should be PNGs (e.g., from matplotlib) and positioned at 0.
+#  • Returns the output_path where the PDF was written.
+# ────────────────────────────────────────────────────────────────────────────
+
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Image, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors

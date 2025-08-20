@@ -1,3 +1,25 @@
+# diagnostics.py
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# Plotting utilities for PK model diagnostics.
+#
+# Provides:
+#  • plot_residuals(...) → PNG buffer of residuals vs. time
+#  • plot_vpc(...)       → PNG buffer of a Visual Predictive Check (5–95% band)
+#
+# Helpers:
+#  • _params_from_fit(model, fit) → parameter vector in canonical order
+#  • _pcov_from_fit(model, fit, params?) → positive-semidefinite covariance
+#  • _nearest_psd(mat) → clips eigenvalues to ensure PSD
+#  • _pred(model, t, p, dose) → model prediction wrapper (1c/2c/3c)
+#
+# Notes:
+#  • Uses macro parameters for 2c/3c (A, α, B, β, [C, γ]); 1c uses (Vd, kel).
+#  • Ensures covariance is PSD; falls back to a diagonal ridge if needed.
+#  • Enforces parameter positivity on sampled draws to avoid invalid kinetics.
+#  • Returns BytesIO buffers (PNG) suitable for embedding in PDF reports.
+# ──────────────────────────────────────────────────────────────────────────────
+
 import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO

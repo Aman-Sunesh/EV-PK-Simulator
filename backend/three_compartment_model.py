@@ -1,3 +1,30 @@
+# three_compartment_model.py
+#
+# ────────────────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator — Three-Compartment (macro) Model Utilities
+#
+# What this module provides
+#  • preprocess_data(df): light QC → numeric, sorted, deduped rows
+#  • model_three_comp(t, A, α, B, β, C, γ): C(t)=A·e^(−αt)+B·e^(−βt)+C·e^(−γt)
+#  • fit_three_compartment(t, C, dose, ...): robust tri-exponential fit
+#      - Softplus-constrained rates with enforced minimum gaps (identifiability)
+#      - Softmax amplitude partition (A,B,C) from total C0
+#      - Multi-start least-squares on log-scale residuals (multiplicative noise)
+#      - Gauss–Newton covariance (+ ridge) and CI via delta-method draws
+#  • compute_pk_parameters_three(fit, dose): C0, t½(α/β/γ), AUC, CL, Vc, MRT
+#  • compute_gof_three(t, C, fit): R² (log-space), AIC/AICc, rate-separation,
+#                                  tail AUC fraction diagnostics
+#  • plot_fit_three(...): linear & semilog fits, 3-comp mechanistic overlay,
+#                         dosing timeline strip
+#
+# Notes
+#  • This is a macro-exponential parameterization. Mechanistic overlays require
+#    micro constants (k10,k12,k21,k13,k31) and volumes (V1,V2,V3) for intuition.
+#  • Two logits are used for amplitude shares (softmax); the third is anchored.
+#  • A small MIN_GAP is enforced between α, β, γ to avoid degeneracy.
+#  • Keep signatures stable; other services import these symbols directly.
+# ────────────────────────────────────────────────────────────────────────────────────────
+
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit, least_squares

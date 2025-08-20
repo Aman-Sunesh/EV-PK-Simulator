@@ -1,3 +1,32 @@
+# dosing_program.py
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# Expand high-level dosing “program” steps into the low-level
+# simulator-friendly `dosing` list:
+#     [{time: float, dose: float, Tinf?: float}, ...]
+#
+# Supports step types:
+#  • bolus      → single IV bolus at an absolute time
+#  • infusion   → single infusion window (dose is total over Tinf)
+#  • repeat     → repeated bolus/infusion on a fixed schedule
+#  • titrate    → stepwise dose adjustments every τ (optional per-step Tinf)
+#  • onoff      → infusion on/off windows across a duration (window=Tinf=dose_on)
+#
+# Examples:
+#  {"type":"bolus","time":0,"dose":100}
+#  {"type":"infusion","start":0,"dose":200,"Tinf":1.0}
+#  {"type":"repeat","pattern":"bolus","start":0,"tau":8,"count":6,"dose":100}
+#  {"type":"repeat","pattern":"infusion","start":0,"tau":24,"count":5,"dose":2400,"Tinf":8}
+#  {"type":"titrate","start":0,"tau":24,"steps":[{"dose":200},{"dose":150},{"dose":100}]}
+#  {"type":"onoff","start":0,"duration":72,"dose":2400,"dose_on":8,"dose_off":16}
+#
+# Notes:
+#  • For “infusion” (and repeat: infusion), `dose` is the total amount delivered over Tinf.
+#  • “onoff” expands to infusion windows: period = dose_on + dose_off, window Tinf = dose_on.
+#  • Minimal validation enforces positivity for key fields (dose, Tinf, tau, count, etc.).
+#  • `route` is accepted for symmetry with other APIs; current logic is route-agnostic.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
 from typing import List, Dict, Optional
 
 def _pos(name, v):

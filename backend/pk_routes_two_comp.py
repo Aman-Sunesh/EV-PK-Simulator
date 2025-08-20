@@ -1,3 +1,33 @@
+# pk_routes_two_comp.py
+#
+# ───────────────────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator — Two-Compartment Route Simulator
+# (IV bolus / short infusion / oral / subcutaneous)
+#
+# What this module provides
+#  • simulate_two_comp_route(route, params, dosing|repeat, t_end, dt) → dict
+#      - Routes: "iv_bolus", "iv_infusion", "oral", "sc"
+#      - Params may be given as macro (A, α, B, β) or micro (k10, k12, k21, V1)
+#      - Accepts either explicit `dosing` list or simple `repeat` rule
+#      - Returns time/conc arrays, summary KPIs (Cmax, Tmax, AUC), and dosing echo
+#
+#  • Internal helpers (used by tests/other modules)
+#      _time_grid, _trapz, _expm1_pos,
+#      _validate_positive, _validate_nonnegative,
+#      _macros_from_micro, _get_macros,
+#      _expand_extravascular_continuous,
+#      _iv_bolus_curve_two, _iv_infusion_curve_two, _phi, _extravascular_curve_two,
+#      _summarize
+#
+# Notes
+#  • Macro form models concentration per administered dose D:
+#       C(t) = Σ_i D_i [ A e^(−α (t−t_i)) + B e^(−β (t−t_i)) ] for t ≥ t_i
+#    When using micro constants, we convert (k10,k12,k21,V1) → (A,α,B,β).
+#  • “Oral/SC” here means first-order absorption into the central compartment
+#    (Bateman-style convolution against the two-exponential impulse response).
+#  • For `repeat` with constant τ, steady-state summaries are returned where valid.
+# ───────────────────────────────────────────────────────────────────────────────────────────
+
 import numpy as np
 from typing import List, Dict, Optional, Tuple
 

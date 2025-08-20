@@ -1,3 +1,23 @@
+# two_compartment_model.py
+#
+# ──────────────────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator — Two-Compartment (macro) Model Utilities
+#
+# What this module provides
+#  • preprocess_data(df): light QC → numeric, sorted, deduped rows
+#  • model_two_comp(t, A, α, B, β): C(t) = A·e^(−αt) + B·e^(−βt)
+#  • fit_two_compartment(t, C, dose, ...): NLS fit for A, α, B, β (+ pcov & 95% CI)
+#  • compute_pk_parameters_two(fit, dose): C0, t½,α / t½,β, AUC, CL, Vc, MRT
+#  • compute_gof_two(t, C, fit): R², residual stats, AIC
+#  • plot_fit_two(...): linear & semilog fits, mechanistic C1/C2 overlay, dosing strip
+#
+# Notes
+#  • This is a macro-exponential parameterization (A, α, B, β). Mechanistic
+#    overlays in plot_fit_two are for intuition only and use provided k10,k12,k21,V1,V2.
+#  • curve_fit uses bounds ≥0 and maxfev=5000 for robustness on “shallow” biphasic data.
+#  • Keep function signatures stable; other services import these directly.
+# ──────────────────────────────────────────────────────────────────────────────────────────
+
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit

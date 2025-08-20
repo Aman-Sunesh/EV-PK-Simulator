@@ -1,3 +1,24 @@
+# uq.py
+#
+# ─────────────────────────────────────────────────────────────────────────────────────
+# EV–PK Simulator — Parameter Uncertainty Quantification
+#
+# What this module provides
+#  • bootstrap_uq(...): residual bootstrap → refit → parameter samples & CIs
+#  • mcmc_uq(...): simple Metropolis–Hastings on (log-parameters)
+#
+# Helpers (internal)
+#  • _pack(model, fit)  → (param_vector, pcov, names)
+#  • _pred(model, t, p, dose) → model prediction at times t
+#  • _refit(model, t, C, dose) → re-fit model to (t, C)
+#
+# Notes
+#  • Supported models: "1c", "2c", "3c"
+#  • For 2c/3c macro models, `dose` is unused by the predictor, but preserved
+#    in the API and forwarded to the fitters for signature symmetry.
+#  • Returned structures are JSON-serializable (lists, not ndarrays).
+# ─────────────────────────────────────────────────────────────────────────────────────
+
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from io import BytesIO

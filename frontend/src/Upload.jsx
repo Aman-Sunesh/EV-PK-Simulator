@@ -777,7 +777,7 @@ const onDrop = useCallback(async (files) => {
 
       {selectedModel && (
         <>
-      <h2>
+      <h2 className="text-center">
         {selectedModel === "one" ? "One-Compartment Model" :
          selectedModel === "two" ? "Two-Compartment Model" :
                                    "Three-Compartment Model"}
@@ -1519,14 +1519,11 @@ const onDrop = useCallback(async (files) => {
                   </label>
                 </>
               )}
-              &nbsp;
-              <button onClick={makeRepeatSchedule}>Generate</button>
             </div>
 
             {/* Manual schedule table */}
             <div className="input-row">
-              <strong>Custom schedule</strong>&nbsp;
-              <button onClick={addDoseRow}>Add dose</button>
+              <strong>Custom schedule</strong>
             </div>
             {schedule.length > 0 && (
               <table className="preview-table">
@@ -1576,8 +1573,6 @@ const onDrop = useCallback(async (files) => {
                 <input type="checkbox" checked={logY} onChange={e=>setLogY(e.target.checked)} />
                 &nbsp;Semilog Y
               </label>
-              &nbsp;
-              <button onClick={runSim} disabled={simErrors.length > 0}>Simulate</button>
             </div>
             {simErrors.length > 0 && (
               <div className="error-list">
@@ -1585,6 +1580,19 @@ const onDrop = useCallback(async (files) => {
                 {simErrors.length > 5 && <div>• ...and {simErrors.length - 5} more</div>}
               </div>
             )}
+
+            {/* Unified actions toolbar */}
+            <div className="actions-row">
+              <button type="button" className="btn-ghost" onClick={addDoseRow}>
+                Add dose
+              </button>
+              <button type="button" className="btn-secondary" onClick={makeRepeatSchedule}>
+                Generate
+              </button>
+              <button onClick={runSim} disabled={simErrors.length > 0}>
+                Simulate
+              </button>
+            </div>
 
             {/* Results */}
             {sim && (

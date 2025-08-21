@@ -1,0 +1,11 @@
+subject,time,concentration,species,dose
+1,0,0.692613,Homo sapiens,100
+1,0.25,0.522917,Homo sapiens,100
+1,0.5,0.428321,Homo sapiens,100
+1,1,0.283331,Homo sapiens,100
+1,2,0.174578,Homo sapiens,100
+1,4,0.105851,Homo sapiens,100
+1,8,0.057685,Homo sapiens,100
+1,12,0.035666,Homo sapiens,100
+1,16,0.022473,Homo sapiens,100
+1,24,0.008538,Homo sapiens,100

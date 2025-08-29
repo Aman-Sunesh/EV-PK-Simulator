@@ -4,7 +4,7 @@ A CSV‑first, demotion‑aware pharmacokinetics toolkit for extracellular vesic
 
 > **What’s new?** Three‑compartment support, Route Explorer (IV bolus / IV infusion / Oral / SC), dosing regimens (repeat/program), automatic demotion (3→2, 2→1), and a curated **benchmarks** suite with sample reports.
 
----
+--- 
 
 ## Table of Contents
 

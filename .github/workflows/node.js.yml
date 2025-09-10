@@ -42,5 +42,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: react-app-build
-        path: /static  # Path to the build output
+        path: ./static  # Path to the build output
     

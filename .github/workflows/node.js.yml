@@ -37,4 +37,10 @@ jobs:
       env:
         CI: ""
       run: npm run build
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: react-app-build
+        path: /static  # Path to the build output
     

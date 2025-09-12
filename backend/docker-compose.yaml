@@ -1,0 +1,6 @@
+services:
+  igem:
+    build: .
+    container_name: igem
+    networks:
+      - caddy

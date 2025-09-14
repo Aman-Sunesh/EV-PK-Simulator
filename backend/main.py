@@ -83,6 +83,11 @@ from sensitivity import local_sensitivity, global_prcc_sensitivity, global_sobol
 from diagnostics import plot_residuals, plot_vpc
 import base64
 
+# Import PD models
+from pd_models import (
+    k_kill_conc, bacteria_cfu_dynamics, hill_emax, pmm2_rescue_activity
+)
+
 app = FastAPI()
 
 # @app.on_event("startup")
@@ -627,6 +632,22 @@ async def create_report(payload: dict = Body(...)):
     subj_col = "subject" if "subject" in df.columns else ("Subject" if "Subject" in df.columns else None)
     groups = list(df.groupby(subj_col)) if subj_col else [("All", df)]
 
+
+    pd_results = {}
+    # Get PD parameters from payload (with defaults)
+    pd_params = payload.get("pd_params", {})
+    # Bacteria CFU
+    CFU0 = float(pd_params.get("CFU0", 1e6))
+    k_max = float(pd_params.get("k_max", 1.0))
+    EC50 = float(pd_params.get("EC50", 1.0))
+    hill_kill = float(pd_params.get("hill_kill", 1.0))
+    k_grow = float(pd_params.get("k_grow", 0.0))
+    # PMM2 rescue
+    Emax = float(pd_params.get("Emax", 100.0))
+    EC50_pmm2 = float(pd_params.get("EC50_pmm2", 1.0))
+    hill_pmm2 = float(pd_params.get("hill_pmm2", 1.0))
+    Emin = float(pd_params.get("Emin", 0.0))
+
     for idx, (subj, grp) in enumerate(groups):
         mdl_for_page = model
         selection_diag = None
@@ -644,6 +665,12 @@ async def create_report(payload: dict = Body(...)):
             if "dose" not in md_safe:
                 raise HTTPException(status_code=400, detail="Missing 'dose' in metadata or data column.")
             dose_sub = float(md_safe["dose"])
+
+        # --- PD calculations ---
+        # Bacteria CFU dynamics
+        cfu = bacteria_cfu_dynamics(t_sub, CFU0, C_sub, k_max, EC50, hill_kill, k_grow)
+        # PMM2 rescue
+        pmm2 = pmm2_rescue_activity(C_sub, Emax, EC50_pmm2, hill_pmm2, Emin)
 
         # fit + PK + GOF + plot (branch by model)
         if model == "two":
@@ -1031,13 +1058,42 @@ async def create_report(payload: dict = Body(...)):
         elems.append(fit_tbl)
         elems.append(Spacer(1, 12))
 
+        # --- PD Results Tables ---
+        # Bacteria CFU dynamics table
+        cfu_rows = [["Time", "CFU"]]
+        # Show a subset for brevity if too many points
+        cfu_disp_idx = np.linspace(0, len(t_sub)-1, min(10, len(t_sub))).astype(int)
+        for i in cfu_disp_idx:
+            cfu_rows.append([f"{t_sub[i]:.2f}", f"{cfu[i]:.3g}"])
+        cfu_tbl = Table(cfu_rows, hAlign="LEFT")
+        cfu_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0),(-1,0), colors.lightgrey),
+            ("GRID", (0,0),(-1,-1), 0.5, colors.grey),
+        ]))
+        elems.append(Paragraph("Bacteria CFU Dynamics (subset)", styles["Heading2"]))
+        elems.append(cfu_tbl)
+        elems.append(Spacer(1, 12))
+
+        # PMM2 rescue table
+        pmm2_rows = [["Time", "%Activity"]]
+        for i in cfu_disp_idx:
+            pmm2_rows.append([f"{t_sub[i]:.2f}", f"{pmm2[i]:.2f}"])
+        pmm2_tbl = Table(pmm2_rows, hAlign="LEFT")
+        pmm2_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0),(-1,0), colors.lightgrey),
+            ("GRID", (0,0),(-1,-1), 0.5, colors.grey),
+        ]))
+        elems.append(Paragraph("PMM2 Rescue Activity (subset)", styles["Heading2"]))
+        elems.append(pmm2_tbl)
+        elems.append(Spacer(1, 12))
+
         # Goodness-of-fit
         gof_data = [["R²", f"{gof['R2']:.3f}"], ["AIC", f"{gof['AIC']:.1f}"]]
         if "AICc" in gof and np.isfinite(gof["AICc"]):
             gof_data.append(["AICc", f"{gof['AICc']:.1f}"])
         gof_tbl  = Table(gof_data, hAlign="LEFT")
         gof_tbl.spaceBefore = 20
-        gof_tbl.setStyle(TableStyle([("GRID", (0,0),(-1,-1), 0.5, colors.grey)]))
+        gof_tbl.setStyle(TableStyle([("GRID", (0,0), (-1,-1), 0.5, colors.grey)]))
         elems.append(Spacer(1, 20))
         elems.append(Paragraph("Goodness-of-Fit", h2_break))
         elems.append(gof_tbl)
@@ -1332,6 +1388,36 @@ async def simulate_pk(payload: dict = Body(...)):
     if fit_info:
         result["fit_from_data"] = fit_info
     return _json_safe(result)
+
+@app.post("/pd/bacteria_cfu")
+async def pd_bacteria_cfu(payload: dict):
+    """
+    Calculate bacteria CFU dynamics given PK profile and PD params.
+    Expects payload with keys: t, C_t, CFU0, k_max, EC50, hill, k_grow
+    """
+    t = np.array(payload["t"])
+    C_t = np.array(payload["C_t"])
+    CFU0 = payload["CFU0"]
+    k_max = payload["k_max"]
+    EC50 = payload["EC50"]
+    hill = payload.get("hill", 1.0)
+    k_grow = payload.get("k_grow", 0.0)
+    CFU = bacteria_cfu_dynamics(t, CFU0, C_t, k_max, EC50, hill, k_grow)
+    return _json_safe({"t": t.tolist(), "CFU": CFU.tolist()})
+
+@app.post("/pd/pmm2_rescue")
+async def pd_pmm2_rescue(payload: dict):
+    """
+    Calculate %Activity (PMM2 rescue) given PK profile and Hill/Emax params.
+    Expects payload with keys: C_t, Emax, EC50, hill, Emin
+    """
+    C_t = np.array(payload["C_t"])
+    Emax = payload["Emax"]
+    EC50 = payload["EC50"]
+    hill = payload.get("hill", 1.0)
+    Emin = payload.get("Emin", 0.0)
+    activity = pmm2_rescue_activity(C_t, Emax, EC50, hill, Emin)
+    return _json_safe({"C_t": C_t.tolist(), "%Activity": activity.tolist()})
 
 def _run_what_if(payload: dict) -> Dict:
     model  = payload.get("model", "1c")

@@ -100,6 +100,24 @@ export default function Upload() {
   const [showSeeds, setShowSeeds] = useState(false);
   const [form1c, setForm1c] = useState("micro"); // "micro" (Vd,kel) default | "macro" (A,alpha)
 
+  // PD (Pharmacodynamic) analysis state
+  const [pdMode, setPdMode] = useState(false); // toggle PD analysis on/off
+  const [pdModelType, setPdModelType] = useState("bacteria"); // "bacteria" | "pmm2"
+  const [pdResults, setPdResults] = useState(null); // stores PD analysis results
+  
+  // Bacteria CFU dynamics parameters
+  const [CFU0, setCFU0] = useState(1e6);      // initial CFU
+  const [kMax, setKMax] = useState(1.0);      // maximal kill rate
+  const [EC50Kill, setEC50Kill] = useState(1.0); // EC50 for kill rate
+  const [hillKill, setHillKill] = useState(1.0);  // Hill coefficient for kill
+  const [kGrow, setKGrow] = useState(0.0);    // bacterial growth rate
+  
+  // PMM2 rescue parameters
+  const [Emax, setEmax] = useState(100.0);    // maximal effect (%Activity)
+  const [EC50PMM2, setEC50PMM2] = useState(1.0); // EC50 for PMM2 rescue
+  const [hillPMM2, setHillPMM2] = useState(1.0);  // Hill coefficient for PMM2
+  const [Emin, setEmin] = useState(0.0);      // baseline effect
+
   // checks if uploaded data include per-row dose?
   const hasDoseFromData = useMemo(() => {
     if (!Array.isArray(rawData) || rawData.length === 0) return false;
@@ -304,7 +322,12 @@ const onDrop = useCallback(async (files) => {
         ? { k10, k12, k21, V1, V2 }
         : selectedModel === "three"
         ? { k10: k103, k12: k123, k21: k213, k13: k133, k31: k313, V1: V13, V2: V23, V3: V33 }
-        : {})
+        : {}),
+      ...(pdMode ? {
+        pd_params: pdModelType === "bacteria" 
+          ? { CFU0, k_max: kMax, EC50: EC50Kill, hill_kill: hillKill, k_grow: kGrow }
+          : { Emax, EC50_pmm2: EC50PMM2, hill_pmm2: hillPMM2, Emin }
+      } : {})
     };
     try {
       const res = await axios.post(
@@ -636,6 +659,108 @@ const onDrop = useCallback(async (files) => {
     }
   };
 
+  // Run PD analysis - bacteria CFU dynamics
+  const runPDBacteria = async () => {
+    // Check if we have concentration-time data from simulation or need to generate from fitted data
+    let timeData, concData;
+    
+    if (sim && sim.time && sim.conc) {
+      // Use simulation data
+      timeData = sim.time;
+      concData = sim.conc;
+    } else if (mode === "analyze" && Array.isArray(fitParams) && fitParams.length > 0 && data.length > 0) {
+      // Use original fitted data
+      timeData = data.map(d => d.time);
+      concData = data.map(d => d.concentration);
+    } else {
+      alert("Please run PK analysis/simulation first to get concentration-time profile");
+      return;
+    }
+
+    const payload = {
+      t: timeData,
+      C_t: concData,
+      CFU0: Number(CFU0),
+      k_max: Number(kMax),
+      EC50: Number(EC50Kill),
+      hill: Number(hillKill),
+      k_grow: Number(kGrow)
+    };
+
+    try {
+      const res = await axios.post("/pd/bacteria_cfu", payload);
+      setPdResults({
+        type: "bacteria",
+        time: res.data.t,
+        effect: res.data.CFU,
+        concentration: concData,
+        parameters: {
+          CFU0: Number(CFU0),
+          k_max: Number(kMax),
+          EC50: Number(EC50Kill),
+          hill: Number(hillKill),
+          k_grow: Number(kGrow)
+        }
+      });
+    } catch (err) {
+      alert("PD Bacteria error: " + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  // Run PD analysis - PMM2 rescue
+  const runPDPMM2 = async () => {
+    // Check if we have concentration-time data from simulation or need to generate from fitted data
+    let timeData, concData;
+    
+    if (sim && sim.time && sim.conc) {
+      // Use simulation data
+      timeData = sim.time;
+      concData = sim.conc;
+    } else if (mode === "analyze" && Array.isArray(fitParams) && fitParams.length > 0 && data.length > 0) {
+      // Use original fitted data
+      timeData = data.map(d => d.time);
+      concData = data.map(d => d.concentration);
+    } else {
+      alert("Please run PK analysis/simulation first to get concentration-time profile");
+      return;
+    }
+
+    const payload = {
+      C_t: concData,
+      Emax: Number(Emax),
+      EC50: Number(EC50PMM2),
+      hill: Number(hillPMM2),
+      Emin: Number(Emin)
+    };
+
+    try {
+      const res = await axios.post("/pd/pmm2_rescue", payload);
+      setPdResults({
+        type: "pmm2",
+        time: timeData,
+        effect: res.data["%Activity"],
+        concentration: concData,
+        parameters: {
+          Emax: Number(Emax),
+          EC50: Number(EC50PMM2),
+          hill: Number(hillPMM2),
+          Emin: Number(Emin)
+        }
+      });
+    } catch (err) {
+      alert("PD PMM2 error: " + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  // Combined PD analysis function
+  const runPDAnalysis = async () => {
+    if (pdModelType === "bacteria") {
+      await runPDBacteria();
+    } else {
+      await runPDPMM2();
+    }
+  };
+
   // Home navigation: reset to model picker and clear transient state
   const goHome = () => {
     setSelectedModel("");
@@ -648,6 +773,8 @@ const onDrop = useCallback(async (files) => {
     setSchedule([]);
     setSim(null);
     setMode("analyze");
+    setPdMode(false);
+    setPdResults(null);
   };
 
   // Simple SVG plot
@@ -722,6 +849,70 @@ const onDrop = useCallback(async (files) => {
         )}
       </svg>
     );
+  };
+
+  // PD Plot component for visualizing pharmacodynamic effects
+  const PDPlot = ({ pdData, width=700, height=300, margin=40 }) => {
+    if (!pdData || !pdData.time || !pdData.effect || pdData.time.length !== pdData.effect.length || pdData.time.length === 0) {
+      return null;
+    }
+    
+    const time = pdData.time;
+    const effect = pdData.effect;
+    const tmin = Math.min(...time), tmax = Math.max(...time);
+    const x = t => margin + (t - tmin) * (width - 2*margin) / (tmax - tmin || 1);
+
+    const effectType = pdData.type;
+    let effectLabel, effectColor;
+    
+    if (effectType === "bacteria") {
+      effectLabel = "CFU";
+      effectColor = "#dc3545";
+      // Use log scale for bacteria CFU
+      const positives = effect.filter(v => v > 0);
+      const eps = positives.length ? Math.min(...positives) * 0.01 : 1e-6;
+      const logs = effect.map(v => Math.log10(Math.max(v, eps)));
+      const emin = Math.min(...logs), emax = Math.max(...logs);
+      const y = e => {
+        const ev = Math.log10(Math.max(e, eps));
+        return height - margin - (ev - emin) * (height - 2*margin) / (emax - emin || 1);
+      };
+      effectLabel = "log10 CFU";
+      const pts = time.map((t, i) => `${x(t)},${y(effect[i])}`).join(" ");
+      
+      return (
+        <svg width={width} height={height} className="pd-chart">
+          <line x1={margin} y1={height-margin} x2={width-margin} y2={height-margin} stroke="#888"/>
+          <line x1={margin} y1={margin} x2={margin} y2={height-margin} stroke="#888"/>
+          <polyline fill="none" stroke={effectColor} strokeWidth="3" points={pts}/>
+          <text x={width/2} y={height-8} textAnchor="middle" fontSize="12">Time (h)</text>
+          <text x={16} y={margin-10} fontSize="12">{effectLabel}</text>
+          <text x={width - margin} y={margin - 12} textAnchor="end" fontSize="12" fill={effectColor}>
+            Bacterial CFU Dynamics
+          </text>
+        </svg>
+      );
+    } else {
+      // PMM2 rescue - linear scale (percentage)
+      effectLabel = "%Activity";
+      effectColor = "#28a745";
+      const emin = 0, emax = Math.max(...effect, 100) * 1.1;
+      const y = e => height - margin - (e - emin) * (height - 2*margin) / (emax - emin || 1);
+      const pts = time.map((t, i) => `${x(t)},${y(effect[i])}`).join(" ");
+      
+      return (
+        <svg width={width} height={height} className="pd-chart">
+          <line x1={margin} y1={height-margin} x2={width-margin} y2={height-margin} stroke="#888"/>
+          <line x1={margin} y1={margin} x2={margin} y2={height-margin} stroke="#888"/>
+          <polyline fill="none" stroke={effectColor} strokeWidth="3" points={pts}/>
+          <text x={width/2} y={height-8} textAnchor="middle" fontSize="12">Time (h)</text>
+          <text x={16} y={margin-10} fontSize="12">{effectLabel}</text>
+          <text x={width - margin} y={margin - 12} textAnchor="end" fontSize="12" fill={effectColor}>
+            PMM2 Activity Rescue
+          </text>
+        </svg>
+      );
+    }
   };
 
   return (
@@ -1682,6 +1873,191 @@ const onDrop = useCallback(async (files) => {
                 </ul>
               </div>
             )})}
+
+          {/* PD Analysis Section - Available for both analyze and simulate modes */}
+          {(sim || (mode === "analyze" && Array.isArray(fitParams) && fitParams.length > 0)) && (
+            <div className="pd-section" style={{marginTop: 20, padding: 15, border: "1px solid #dee2e6", borderRadius: 5}}>
+              <h4>Pharmacodynamic (PD) Analysis</h4>
+              <div className="input-row">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={pdMode}
+                    onChange={(e) => setPdMode(e.target.checked)}
+                  />
+                  &nbsp;Enable PD Analysis
+                </label>
+              </div>
+              
+              {pdMode && (
+                <>
+                  <div className="input-row">
+                    <label>
+                      PD Model:&nbsp;
+                      <select value={pdModelType} onChange={(e) => setPdModelType(e.target.value)}>
+                        <option value="bacteria">Bacteria CFU Dynamics</option>
+                        <option value="pmm2">PMM2 Rescue</option>
+                      </select>
+                    </label>
+                  </div>
+                  
+                  {pdModelType === "bacteria" && (
+                    <div className="pd-params">
+                      <h5>Bacteria CFU Parameters</h5>
+                      <div className="input-row">
+                        <label>
+                          Initial CFU (CFU0):&nbsp;
+                          <input
+                            type="number"
+                            value={CFU0}
+                            onChange={(e) => setCFU0(parseFloat(e.target.value))}
+                            step="1000"
+                            style={{width: 100}}
+                          />
+                        </label>
+                      </div>
+                      <div className="input-row">
+                        <label>
+                          Max Kill Rate (k_max):&nbsp;
+                          <input
+                            type="number"
+                            value={kMax}
+                            onChange={(e) => setKMax(parseFloat(e.target.value))}
+                            step="0.1"
+                            style={{width: 80}}
+                          />
+                          &nbsp;1/h
+                        </label>
+                      </div>
+                      <div className="input-row">
+                        <label>
+                          EC50 for Kill:&nbsp;
+                          <input
+                            type="number"
+                            value={EC50Kill}
+                            onChange={(e) => setEC50Kill(parseFloat(e.target.value))}
+                            step="0.1"
+                            style={{width: 80}}
+                          />
+                          &nbsp;mg/L
+                        </label>
+                      </div>
+                      <div className="input-row">
+                        <label>
+                          Hill Coefficient:&nbsp;
+                          <input
+                            type="number"
+                            value={hillKill}
+                            onChange={(e) => setHillKill(parseFloat(e.target.value))}
+                            step="0.1"
+                            style={{width: 80}}
+                          />
+                        </label>
+                      </div>
+                      <div className="input-row">
+                        <label>
+                          Growth Rate (k_grow):&nbsp;
+                          <input
+                            type="number"
+                            value={kGrow}
+                            onChange={(e) => setKGrow(parseFloat(e.target.value))}
+                            step="0.01"
+                            style={{width: 80}}
+                          />
+                          &nbsp;1/h
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {pdModelType === "pmm2" && (
+                    <div className="pd-params">
+                      <h5>PMM2 Rescue Parameters</h5>
+                      <div className="input-row">
+                        <label>
+                          Max Effect (Emax):&nbsp;
+                          <input
+                            type="number"
+                            value={Emax}
+                            onChange={(e) => setEmax(parseFloat(e.target.value))}
+                            step="1"
+                            style={{width: 80}}
+                          />
+                          &nbsp;%
+                        </label>
+                      </div>
+                      <div className="input-row">
+                        <label>
+                          EC50:&nbsp;
+                          <input
+                            type="number"
+                            value={EC50PMM2}
+                            onChange={(e) => setEC50PMM2(parseFloat(e.target.value))}
+                            step="0.1"
+                            style={{width: 80}}
+                          />
+                          &nbsp;mg/L
+                        </label>
+                      </div>
+                      <div className="input-row">
+                        <label>
+                          Hill Coefficient:&nbsp;
+                          <input
+                            type="number"
+                            value={hillPMM2}
+                            onChange={(e) => setHillPMM2(parseFloat(e.target.value))}
+                            step="0.1"
+                            style={{width: 80}}
+                          />
+                        </label>
+                      </div>
+                      <div className="input-row">
+                        <label>
+                          Baseline Effect (Emin):&nbsp;
+                          <input
+                            type="number"
+                            value={Emin}
+                            onChange={(e) => setEmin(parseFloat(e.target.value))}
+                            step="1"
+                            style={{width: 80}}
+                          />
+                          &nbsp;%
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div className="input-row">
+                    <button onClick={runPDAnalysis} className="btn-primary">
+                      Run PD Analysis
+                    </button>
+                  </div>
+                  
+                  {pdResults && (
+                    <div className="pd-results" style={{marginTop: 15}}>
+                      <h5>PD Results</h5>
+                      <div className="kpis">
+                        {pdResults.type === "bacteria" && (
+                          <>
+                            <div className="kpi">Initial CFU: <strong>{pdResults.parameters.CFU0.toExponential(2)}</strong></div>
+                            <div className="kpi">Final CFU: <strong>{pdResults.effect[pdResults.effect.length - 1].toExponential(2)}</strong></div>
+                            <div className="kpi">Log Kill: <strong>{fmt(Math.log10(pdResults.parameters.CFU0) - Math.log10(pdResults.effect[pdResults.effect.length - 1]), 2)}</strong></div>
+                          </>
+                        )}
+                        {pdResults.type === "pmm2" && (
+                          <>
+                            <div className="kpi">Max Activity: <strong>{fmt(Math.max(...pdResults.effect), 2)}%</strong></div>
+                            <div className="kpi">Final Activity: <strong>{fmt(pdResults.effect[pdResults.effect.length - 1], 2)}%</strong></div>
+                          </>
+                        )}
+                      </div>
+                      <PDPlot pdData={pdResults} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

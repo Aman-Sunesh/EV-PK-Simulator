@@ -89,7 +89,7 @@ from pd_models import (
     k_kill_conc, bacteria_cfu_dynamics, hill_emax, pmm2_rescue_activity
 )
 
-static_dir = "../frontend/build"
+static_dir = "./static"
 
 app = FastAPI()
 

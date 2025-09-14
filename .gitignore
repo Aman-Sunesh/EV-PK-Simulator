@@ -9,3 +9,6 @@ __pycache__/
 backend/ev_portal.db
 # Ignore all Node modules
 frontend/node_modules/
+
+Pipfile
+Pipfile.lock

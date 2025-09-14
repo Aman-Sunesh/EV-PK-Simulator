@@ -33,7 +33,8 @@
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Table, TableStyle,
     Image, Spacer, PageBreak
@@ -88,6 +89,8 @@ from pd_models import (
     k_kill_conc, bacteria_cfu_dynamics, hill_emax, pmm2_rescue_activity
 )
 
+static_dir = "../frontend/build"
+
 app = FastAPI()
 
 # @app.on_event("startup")
@@ -138,8 +141,8 @@ app.add_middleware(
 )
 
 @app.get("/")
-async def root():
-    return {"status": "OK"}
+async def serve_root():
+    return FileResponse(static_dir + "/index.html")
 
 
 @app.post("/upload")
@@ -1469,7 +1472,7 @@ def _run_what_if(payload: dict) -> Dict:
     elif model == "3c":
         result = simulate_three_comp_route(route, params, dosing=None, repeat=repeat, t_end=t_end, dt=dt)
     else:
-        raise HTTPException(status_code=400, detail="model must be '1c','2c', or '3c'")
+        raise HTTPException(status_code=400, detail="model must be '1c', '2c', or '3c'")
 
     result["what_if"] = {
         "weight_kg": weight or None,
@@ -1714,3 +1717,7 @@ async def virtual_trial(payload: dict = Body(...)):
     p95 = np.percentile(M, 95, axis=0).tolist()
 
     return _json_safe({"time": t_ref.tolist(), "p05": p05, "median": p50, "p95": p95})
+
+# Mount static files directory
+# Keep this at the end so it doesn't override other routes
+app.mount("/", StaticFiles(directory=static_dir), name="static")

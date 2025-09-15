@@ -1,7 +1,9 @@
+// src/whatIf.js
+
 import axios from "axios";
 
 const API = axios.create({
-  baseURL: process.env.REACT_APP_API_BASE || "http://localhost:8000",
+  baseURL: process.env.REACT_APP_API_BASE || "", // same-origin fallback
 });
 
 export async function runWhatIf(payload) {

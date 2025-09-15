@@ -1,4 +1,5 @@
 // src/Upload.jsx
+import CompareDemo from "./CompareDemo";
 import { useCallback, useState, useEffect, useMemo } from "react";
 import { useDropzone } from "react-dropzone";
 import axios from "axios";
@@ -6,8 +7,8 @@ import axios from "axios";
 const RATE_MERGE_TOL = 0.02; // 2% threshold for 3c→2c rate-merge demotion
 const fmt = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : "—");
 
-
 export default function Upload() {
+  const [showComparePage, setShowComparePage] = useState(false);
   const PRESETS = {
     "EV (IV, mouse)": {
       one:   { Vd: 0.07,  kel: Math.log(2)/2.0, F: 1.0, ka: 1.5, Tinf: 0.5, tEnd: 24 }, 
@@ -455,7 +456,6 @@ const onDrop = useCallback(async (files) => {
     } else if (selectedModel === "three") {
       if (paramMode === "macro") {
         if (!(alpha3 > 0 && beta3 > 0 && gamma3 > 0)) errs.push("α, β, γ must be > 0");
-        const maxr = Math.max(alpha3 || 0, beta3 || 0, gamma3 || 0) || 1;
       } else {
         if (!(k103 > 0 && k123 > 0 && k213 > 0 && k133 > 0 && k313 > 0)) errs.push("All k's must be > 0");
         if (!(V13 > 0 && V23 > 0 && V33 > 0)) errs.push("V1, V2, V3 must be > 0");
@@ -495,7 +495,7 @@ const onDrop = useCallback(async (files) => {
 
     const mergeNote = useMemo(() => {
     if (selectedModel === "three" && paramMode === "macro") {
-      const maxr = Math.max(alpha3, beta3, gamma3 || 1);
+      const maxr = Math.max(alpha3 || 0, beta3 || 0, gamma3 || 0) || 1;
       const sep =
         Math.min(
           Math.abs(alpha3 - beta3),
@@ -778,7 +778,17 @@ const onDrop = useCallback(async (files) => {
   };
 
   // Simple SVG plot
-  const Plot = ({ time, conc, dosing, width=700, height=300, margin=40 }) => {
+  const Plot = ({
+    time,
+    conc,
+    dosing,
+    width = 700,
+    height = 300,
+    margin = 40,
+    title,
+    xUnit = "h",
+    yUnit = "a.u."
+  }) => {
     if (!time || !conc || time.length !== conc.length || time.length === 0) return null;
     const tmin = Math.min(...time), tmax = Math.max(...time);
     const x = t => margin + (t - tmin) * (width - 2*margin) / (tmax - tmin || 1);
@@ -794,16 +804,22 @@ const onDrop = useCallback(async (files) => {
         const cv = Math.log10(Math.max(c, eps));
         return height - margin - (cv - cminL) * (height - 2*margin) / (cmaxL - cminL || 1);
       };
-      labelY = "log10 Conc";
+      labelY = `log10 Conc (${yUnit})`;
     } else {
       const cmin = 0, cmax = Math.max(...conc) * 1.1 || 1;
       y = c => height - margin - (c - cmin) * (height - 2*margin) / (cmax - cmin || 1);
-      labelY = "Conc";
+      labelY = `Conc (${yUnit})`;
     }
     const pts = time.map((t,i) => `${x(t)},${y(conc[i])}`).join(" ");
 
     return (
       <svg width={width} height={height} className="pk-chart">
+        {/* title */}
+        {title ? (
+          <text x={width/2} y={18} textAnchor="middle" fontSize="14" fontWeight="600">
+            {title}
+          </text>
+        ) : null}
         {/* axes */}
         <line x1={margin} y1={height-margin} x2={width-margin} y2={height-margin} stroke="#888"/>
         <line x1={margin} y1={margin} x2={margin} y2={height-margin} stroke="#888"/>
@@ -829,7 +845,7 @@ const onDrop = useCallback(async (files) => {
           <line key={i} x1={x(d.time)} x2={x(d.time)} y1={height-margin} y2={margin} stroke="#bbb" strokeDasharray="3 4"/>
         ))}
         {/* labels */}
-        <text x={width/2} y={height-8} textAnchor="middle" fontSize="12">Time (h)</text>
+        <text x={width/2} y={height-8} textAnchor="middle" fontSize="12">Time ({xUnit})</text>
         <text x={16} y={margin-10} fontSize="12">{labelY}</text>
 
         {/* legend text */}
@@ -915,9 +931,42 @@ const onDrop = useCallback(async (files) => {
     }
   };
 
+  // --- Dedicated Compare page (early return) ---
+  if (showComparePage) {
+    return (
+      <div className="container">
+        <div style={{ marginBottom: 10 }}>
+          <button
+            onClick={() => setShowComparePage(false)}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#0a58ca",
+              cursor: "pointer",
+              textDecoration: "underline",
+              padding: 0,
+              fontSize: "0.95rem",
+              appearance: "none"        // standard property for compatibility
+            }}
+            aria-label="Back to Home"
+            title="Back to Home"
+          >
+            ← Home
+          </button>
+        </div>
+        <h1>PB–PK Simulator</h1>
+        <div className="preview-section" style={{ marginTop: 16 }}>
+          <h2>Compare Regimens</h2>
+          <p className="note">Paste/edit the JSON array of scenarios and click “Run Comparison”.</p>
+          <CompareDemo />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container">
-      {selectedModel && (
+       {selectedModel && (
         <div style={{marginBottom: 10}}>
           <button
             onClick={goHome}
@@ -928,7 +977,8 @@ const onDrop = useCallback(async (files) => {
               cursor: "pointer",
               textDecoration: "underline",
               padding: 0,
-              fontSize: "0.95rem"
+              fontSize: "0.95rem",
+              appearance: "none" 
             }}
             aria-label="Back to Home"
             title="Back to Home"
@@ -938,30 +988,51 @@ const onDrop = useCallback(async (files) => {
         </div>
       )}
       <h1>PB–PK Simulator</h1>
-      <div className="input-row">
-        <label>
-          Preset:&nbsp;
-          <select value={preset} onChange={e => setPreset(e.target.value)}>
-            {PRESET_NAMES.map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
-        </label>
-        <span style={{marginLeft:12, fontSize:'.9rem', color:'#555'}}>
-          EV defaults preload t½≈0.7–3.5 h (kel≈0.2–1.0 h⁻¹) and faster distribution.
-        </span>
-      </div>
-
+      {selectedModel && (
+        <div className="input-row">
+          <label>
+            Preset:&nbsp;
+            <select value={preset} onChange={e => setPreset(e.target.value)}>
+              {PRESET_NAMES.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <span
+            className="help-badge"
+            title="Presets pre-load sensible starting parameters (Vd/kel, distribution rates/volumes) for the chosen model/species. You can override anything after this."
+            aria-label="Preset help"
+          >?</span>
+          <span style={{marginLeft:8, fontSize:'.9rem', color:'#555'}}>
+            EV defaults preload t½≈0.7–3.5 h (kel≈0.2–1.0 h⁻¹) and faster distribution.
+          </span>
+        </div>
+      )}
       {!selectedModel && (
-        <div className="model-select">
+        <div
+          className="model-select"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(220px, 1fr))",
+            gap: 12,
+            maxWidth: 860
+          }}
+        >
           <button onClick={() => setSelectedModel("one")}>
             One-Compartment Model
           </button>
           <button onClick={() => {
             console.log("Model button clicked—setting to TWO");
-            setSelectedModel("two");}}>
+            setSelectedModel("two");
+          }}>
             Two-Compartment Model
           </button>
           <button onClick={() => setSelectedModel("three")}>
             Three-Compartment Model
+          </button>
+          <button
+            onClick={() => setShowComparePage(true)}
+            style={{ gridColumn: "2 / 3" }}
+          >
+            Compare Regimens
           </button>
         </div>
       )}
@@ -1803,7 +1874,28 @@ const onDrop = useCallback(async (files) => {
                     <div className="kpi">Cavg_ss: <strong>{fmt(sim.summary?.Cavg_ss, 3)}</strong></div>
                   )}
                 </div>
-                <Plot time={sim.time} conc={sim.conc} dosing={sim.dosing} />
+                <Plot
+                  time={sim.time}
+                  conc={sim.conc}
+                  dosing={sim.dosing}
+                  title={
+                    selectedModel === "one"
+                      ? `Expected shapes by route - 1 compartment, kel = ${fmt(kel,2)} 1/h, Vd = ${fmt(Vd,1)} L`
+                      : selectedModel === "two"
+                      ? (
+                          paramMode === "macro"
+                            ? `Expected shapes by route - 2 compartments, α = ${fmt(alpha,2)} 1/h, β = ${fmt(beta,2)} 1/h`
+                            : `Expected shapes by route - 2 compartments, k₁₀ = ${fmt(k10,2)} 1/h, k₁₂ = ${fmt(k12,2)} 1/h, k₂₁ = ${fmt(k21,2)} 1/h, V₁ = ${fmt(V1,1)} L`
+                        )
+                      : (
+                          paramMode === "macro"
+                            ? `Expected shapes by route - 3 compartments, α = ${fmt(alpha3,2)} 1/h, β = ${fmt(beta3,2)} 1/h, γ = ${fmt(gamma3,2)} 1/h`
+                            : `Expected shapes by route - 3 compartments, k₁₀ = ${fmt(k103,2)} 1/h, k₁₂ = ${fmt(k123,2)} 1/h, k₂₁ = ${fmt(k213,2)} 1/h, k₁₃ = ${fmt(k133,2)} 1/h, k₃₁ = ${fmt(k313,2)} 1/h, V₁ = ${fmt(V13,1)} L`
+                        )
+                  }
+                  xUnit="h"
+                  yUnit="a.u."
+                />
               </div>
             )}
           </div>

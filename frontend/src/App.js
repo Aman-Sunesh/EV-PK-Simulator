@@ -6,7 +6,6 @@ function App() {
     <div>
       <Upload />
       <hr />
-      <CompareDemo />
     </div>
   );
 }

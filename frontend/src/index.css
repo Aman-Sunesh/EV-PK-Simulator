@@ -415,3 +415,14 @@ button[title="Back to Home"]:hover{ color: var(--primary-800); text-decoration-t
   margin: 10px 0 4px;
 }
 .actions-row button{ margin-right: 0; } 
+
+/* Mini help badge */
+.help-badge{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:18px; height:18px; margin-left:8px;
+  border:1px solid var(--border); border-radius:999px;
+  font-size:12px; font-weight:700; color:#334155; background:#fff;
+  cursor:help; user-select:none;
+  box-shadow: var(--shadow-1);
+}
+.help-badge:hover{ box-shadow: var(--shadow-2); }

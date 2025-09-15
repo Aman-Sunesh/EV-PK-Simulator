@@ -1181,6 +1181,257 @@ async def create_report(payload: dict = Body(...)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
+@app.post("/pd_report")
+async def create_pd_report(payload: dict = Body(...)):
+    """
+    Generate PD-only analysis report.
+    Expects JSON:
+    {
+      "data": [{time:…, concentration:…, subject?:…}, …],
+      "pd_type": "bacteria" | "pmm2",
+      "pd_params": {CFU0, k_max, EC50, hill_kill, k_grow} or {Emax, EC50_pmm2, hill_pmm2, Emin},
+      "metadata": {study_id?, species?, dose?}
+    }
+    Returns: PDF file response.
+    """
+    # 1) Build DataFrame from data
+    df = pd.DataFrame(payload["data"])
+    if df.empty:
+        raise HTTPException(status_code=400, detail="No data provided")
+    
+    # 2) Get PD parameters and type
+    pd_type = payload.get("pd_type", "bacteria")
+    pd_params = payload.get("pd_params", {})
+    metadata = payload.get("metadata", {})
+    
+    # 3) Group by subject
+    subj_col = "subject" if "subject" in df.columns else ("Subject" if "Subject" in df.columns else None)
+    groups = list(df.groupby(subj_col)) if subj_col else [("All", df)]
+    
+    # 4) Run PD analysis for each subject
+    pd_results = []
+    for subj, grp in groups:
+        t_vals = grp["time"].values if "time" in grp.columns else grp["Time"].values
+        c_vals = grp["concentration"].values if "concentration" in grp.columns else (
+            grp["conc"].values if "conc" in grp.columns else grp["Concentration"].values
+        )
+        
+        if pd_type == "bacteria":
+            CFU0 = float(pd_params.get("CFU0", 1e6))
+            k_max = float(pd_params.get("k_max", 1.0))
+            EC50 = float(pd_params.get("EC50", 1.0))
+            hill_kill = float(pd_params.get("hill_kill", 1.0))
+            k_grow = float(pd_params.get("k_grow", 0.0))
+            
+            effect_vals = bacteria_cfu_dynamics(t_vals, CFU0, c_vals, k_max, EC50, hill_kill, k_grow)
+            final_effect = effect_vals[-1]
+            max_effect = np.max(effect_vals)
+            min_effect = np.min(effect_vals)
+            log_kill = np.log10(CFU0) - np.log10(final_effect) if final_effect > 0 else float('inf')
+            
+            subject_stats = {
+                "Final CFU": f"{final_effect:.2e}",
+                "Log Kill": f"{log_kill:.2f}",
+                "Min CFU": f"{min_effect:.2e}"
+            }
+        else:  # pmm2
+            Emax = float(pd_params.get("Emax", 100.0))
+            EC50_pmm2 = float(pd_params.get("EC50_pmm2", 1.0))
+            hill_pmm2 = float(pd_params.get("hill_pmm2", 1.0))
+            Emin = float(pd_params.get("Emin", 0.0))
+            
+            effect_vals = pmm2_rescue_activity(c_vals, Emax, EC50_pmm2, hill_pmm2, Emin)
+            final_effect = effect_vals[-1]
+            max_effect = np.max(effect_vals)
+            min_effect = np.min(effect_vals)
+            
+            subject_stats = {
+                "Max Activity": f"{max_effect:.2f}%",
+                "Final Activity": f"{final_effect:.2f}%", 
+                "Min Activity": f"{min_effect:.2f}%"
+            }
+        
+        pd_results.append({
+            "subject": subj,
+            "time": t_vals,
+            "concentration": c_vals,
+            "effect": effect_vals,
+            "stats": subject_stats
+        })
+    
+    # 5) Create PDF document
+    out_buf = BytesIO()
+    doc = SimpleDocTemplate(out_buf, pagesize=letter)
+    styles = getSampleStyleSheet()
+    elems = []
+    
+    # Title
+    title_text = f"PD Analysis Report - {'Bacteria CFU Dynamics' if pd_type == 'bacteria' else 'PMM2 Activity Rescue'}"
+    elems.append(Paragraph(title_text, styles["Title"]))
+    elems.append(Spacer(1, 20))
+    
+    # Metadata table
+    if metadata:
+        meta_rows = [["Field", "Value"]]
+        for k, v in metadata.items():
+            meta_rows.append([str(k), str(v)])
+        meta_table = Table(meta_rows, hAlign="LEFT")
+        meta_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+        ]))
+        elems.append(Paragraph("Study Metadata", styles["Heading2"]))
+        elems.append(meta_table)
+        elems.append(Spacer(1, 15))
+    
+    # PD Parameters table
+    param_rows = [["Parameter", "Value"]]
+    for k, v in pd_params.items():
+        param_rows.append([str(k), str(v)])
+    param_table = Table(param_rows, hAlign="LEFT")
+    param_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+    ]))
+    elems.append(Paragraph("PD Model Parameters", styles["Heading2"]))
+    elems.append(param_table)
+    elems.append(Spacer(1, 15))
+    
+    # Combined statistics table
+    if len(pd_results) > 1:
+        combined_stats_rows = [["Subject"] + list(pd_results[0]["stats"].keys())]
+        for result in pd_results:
+            row = [str(result["subject"])] + list(result["stats"].values())
+            combined_stats_rows.append(row)
+        
+        combined_table = Table(combined_stats_rows, hAlign="LEFT") 
+        combined_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+        ]))
+        elems.append(Paragraph("Summary Statistics (All Subjects)", styles["Heading2"]))
+        elems.append(combined_table)
+        elems.append(Spacer(1, 15))
+    
+    # Create combined plot (placeholder for now - we'll generate simple matplotlib plots)
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib
+        matplotlib.use('Agg')  # Use non-interactive backend
+        
+        # Combined plot
+        fig, ax = plt.subplots(figsize=(8, 6))
+        colors_list = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+        
+        for i, result in enumerate(pd_results):
+            color = colors_list[i % len(colors_list)]
+            ax.plot(result["time"], result["effect"], 
+                   label=f'Subject {result["subject"]}', color=color, linewidth=2)
+        
+        ax.set_xlabel('Time (h)')
+        if pd_type == "bacteria":
+            ax.set_ylabel('CFU')
+            ax.set_yscale('log')
+            ax.set_title('Bacteria CFU Dynamics - All Subjects')
+        else:
+            ax.set_ylabel('Activity (%)')
+            ax.set_title('PMM2 Activity Rescue - All Subjects')
+        
+        if len(pd_results) > 1:
+            ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Save combined plot
+        combined_buf = BytesIO()
+        plt.savefig(combined_buf, format='png', dpi=150, bbox_inches='tight')
+        combined_buf.seek(0)
+        plt.close()
+        
+        elems.append(Paragraph("Combined Analysis", styles["Heading2"]))
+        elems.append(Image(combined_buf, width=500, height=375))
+        elems.append(Spacer(1, 15))
+        
+        # Individual subject plots and statistics
+        if len(pd_results) >= 1:
+            elems.append(Paragraph("Individual Subject Analysis", styles["Heading2"]))
+            elems.append(Spacer(1, 10))
+            
+            for result in pd_results:
+                # Subject header
+                elems.append(Paragraph(f"Subject {result['subject']}", styles["Heading3"]))
+                
+                # Individual statistics
+                stats_rows = [["Metric", "Value"]]
+                for metric, value in result["stats"].items():
+                    stats_rows.append([metric, value])
+                stats_table = Table(stats_rows, hAlign="LEFT")
+                stats_table.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                    ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                ]))
+                elems.append(stats_table)
+                elems.append(Spacer(1, 10))
+                
+                # Individual plot
+                try:
+                    fig, ax = plt.subplots(figsize=(6, 4))
+                    ax.plot(result["time"], result["effect"], 'b-', linewidth=2)
+                    ax.set_xlabel('Time (h)')
+                    if pd_type == "bacteria":
+                        ax.set_ylabel('CFU')
+                        ax.set_yscale('log')
+                        ax.set_title(f'Subject {result["subject"]} - Bacteria CFU Dynamics')
+                    else:
+                        ax.set_ylabel('Activity (%)')
+                        ax.set_title(f'Subject {result["subject"]} - PMM2 Activity Rescue')
+                    ax.grid(True, alpha=0.3)
+                    
+                    # Save individual plot
+                    individual_buf = BytesIO()
+                    plt.savefig(individual_buf, format='png', dpi=150, bbox_inches='tight')
+                    individual_buf.seek(0)
+                    plt.close()
+                    
+                    elems.append(Image(individual_buf, width=400, height=300))
+                except Exception as plot_err:
+                    elems.append(Paragraph(f"Plot failed for Subject {result['subject']}: {str(plot_err)}", styles["Normal"]))
+                
+                elems.append(Spacer(1, 15))
+    
+    except Exception as e:
+        # Fallback if matplotlib fails
+        elems.append(Paragraph(f"Plot generation failed: {str(e)}", styles["Normal"]))
+        
+        # Still try to add individual subject analysis even if plots fail
+        if len(pd_results) >= 1:
+            elems.append(Paragraph("Individual Subject Analysis (no plots)", styles["Heading2"]))
+            elems.append(Spacer(1, 10))
+            
+            for result in pd_results:
+                # Subject header
+                elems.append(Paragraph(f"Subject {result['subject']}", styles["Heading3"]))
+                
+                # Individual statistics
+                stats_rows = [["Metric", "Value"]]
+                for metric, value in result["stats"].items():
+                    stats_rows.append([metric, value])
+                stats_table = Table(stats_rows, hAlign="LEFT")
+                stats_table.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                    ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                ]))
+                elems.append(stats_table)
+                elems.append(Spacer(1, 15))
+    
+    # Build PDF
+    try:
+        doc.build(elems)
+        out_buf.seek(0)
+        headers = {"Content-Disposition": 'attachment; filename="PD_Analysis_Report.pdf"'}
+        return StreamingResponse(out_buf, media_type="application/pdf", headers=headers)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
 # if two 3c rates are nearly equal, merge them and return a 2c macro set
 def _maybe_demote_3c_macro(params: Dict, tol: float = 0.02):
     """

@@ -37,6 +37,10 @@ export default function Upload() {
   const [studies, setStudies]   = useState([]);
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedStudy, setSelectedStudy] = useState("");
+  const [loading, setLoading] = useState(false); // Global loading state
+  const [loadingMessage, setLoadingMessage] = useState(""); // Loading message
+  const [showErrorPopup, setShowErrorPopup] = useState(false); // Error popup visibility
+  const [errorMessage, setErrorMessage] = useState(""); // Error message
 
   // Route Explorer (one-compartment) state
   const [rxRoute, setRxRoute] = useState("iv_bolus");      // iv_bolus | iv_infusion | oral | sc
@@ -105,6 +109,7 @@ export default function Upload() {
   const [pdMode, setPdMode] = useState(false); // toggle PD analysis on/off
   const [pdModelType, setPdModelType] = useState("bacteria"); // "bacteria" | "pmm2"
   const [pdResults, setPdResults] = useState(null); // stores PD analysis results
+  const [showSubjectsSeparately, setShowSubjectsSeparately] = useState(false); // toggle separate subject graphs
   
   // Bacteria CFU dynamics parameters
   const [CFU0, setCFU0] = useState(1e6);      // initial CFU
@@ -160,6 +165,9 @@ export default function Upload() {
   // 1) Upload handler
 const onDrop = useCallback(async (files) => {
   setFitParams(null);
+  setLoading(true);
+  setLoadingMessage("Uploading and processing file...");
+  
   const form = new FormData();
   form.append("file", files[0]);
 
@@ -170,7 +178,10 @@ const onDrop = useCallback(async (files) => {
     setWarnings(res.data.warnings);
   } catch (err) {
     console.error("Upload error detail:", err);
-    alert("Upload failed: " + (err.response?.data?.detail || err.message));
+    showError("Upload failed: " + (err.response?.data?.detail || err.message));
+  } finally {
+    setLoading(false);
+    setLoadingMessage("");
   }
 }, []);
 
@@ -183,10 +194,19 @@ const onDrop = useCallback(async (files) => {
       .catch(err => console.error("Failed to fetch studies", err));
   }, []);
 
+  // Helper function to show error popup instead of alert
+  const showError = (message) => {
+    setErrorMessage(message);
+    setShowErrorPopup(true);
+  };
+
   // handler when user picks an example study
   const loadStudy = async id => {
     setFitParams(null);
     setSelectedStudy(id);
+    setLoading(true);
+    setLoadingMessage("Loading study data...");
+    
     try {
       const df = await axios.get(`/studies/${id}`);
       const rows = Array.isArray(df.data) ? df.data : [];
@@ -201,7 +221,10 @@ const onDrop = useCallback(async (files) => {
 
       setWarnings([]);
     } catch (err) {
-      alert("Failed to load study: " + id);
+      showError("Failed to load study: " + id);
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
   };
 
@@ -209,15 +232,19 @@ const onDrop = useCallback(async (files) => {
   const runFit = async () => {
     console.log("runFit called; selectedModel =", selectedModel);
     if (!rawData.length) {
-      alert("Upload first");
+      showError("Upload first");
       return;
     }
     if (mode !== "analyze") {
-      alert("Switch Parameter source to 'Estimate from data (fit)' to run Analyze.");
+      showError("Switch Parameter source to 'Estimate from data (fit)' to run Analyze.");
       return;
     }
     if (!["one","two","three"].includes(selectedModel)) {
-      alert("Please select One, Two, or Three compartment first.");
+      showError("Please select One, Two, or Three compartment first.");
+      return;
+    }
+    if (selectedModel === "pd-only") {
+      showError("PK fitting is not available in PD-only mode. Use the PD Analysis section instead.");
       return;
     }
 
@@ -266,6 +293,9 @@ const onDrop = useCallback(async (files) => {
       }
     }
 
+    setLoading(true);
+    setLoadingMessage(`Fitting ${selectedModel}-compartment model...`);
+    
     try {
       const body = { data: rawData, dose, seeds };
       if (selectedModel === "three") {
@@ -292,13 +322,16 @@ const onDrop = useCallback(async (files) => {
         setWarnings(prev => [...new Set([...(prev || []), ...pWarns])]);
       }
     } catch (err) {
-      alert("Fit error: " + (err.response?.data?.detail || err.message));
+      showError("Fit error: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
   };
 
   // 3) Report button
   const downloadReport = async () => {
-    if (!rawData.length) return alert("Upload first");
+    if (!rawData.length) return showError("Upload first");
 
     const routeLabel =
       rxRoute === "iv_bolus"    ? "IV bolus" :
@@ -330,6 +363,9 @@ const onDrop = useCallback(async (files) => {
           : { Emax, EC50_pmm2: EC50PMM2, hill_pmm2: hillPMM2, Emin }
       } : {})
     };
+    setLoading(true);
+    setLoadingMessage("Generating PDF report...");
+    
     try {
       const res = await axios.post(
         "/report",
@@ -345,7 +381,10 @@ const onDrop = useCallback(async (files) => {
       link.click();
       link.remove();
     } catch (err) {
-      alert("Report error: " + err.message);
+      showError("Report error: " + err.message);
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
   };
 
@@ -511,8 +550,13 @@ const onDrop = useCallback(async (files) => {
 
   // Call backend /simulate_pk
   const runSim = async () => {
+    if (selectedModel === "pd-only") {
+      showError("PK simulation is not available in PD-only mode. Use the PD Analysis section instead.");
+      return;
+    }
+
     const errs = simErrors;
-    if (errs.length) return alert("Fix these first:\n- " + errs.join("\n- "));
+    if (errs.length) return showError("Fix these first:\n- " + errs.join("\n- "));
 
     const modelKey =
       selectedModel === "one" ? "1c" :
@@ -579,17 +623,27 @@ const onDrop = useCallback(async (files) => {
             })
     };
 
+    setLoading(true);
+    setLoadingMessage("Running PK simulation...");
+    
     try {
       const res = await axios.post("/simulate_pk", body);
       setSim(res.data);
     } catch (err) {
-      alert("Sim error: " + (err.response?.data?.detail || err.message));
+      showError("Sim error: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
   };
 
   // Call backend /what_if (supports mg/kg, weight, simple optimizer)
   const runWhatIf = async () => {
-    const modelKey =
+    setLoading(true);
+    setLoadingMessage("Running what-if simulation...");
+    
+    try {
+      const modelKey =
       selectedModel === "one" ? "1c" :
       (selectedModel === "two" ? "2c" : "3c");
 
@@ -651,49 +705,86 @@ const onDrop = useCallback(async (files) => {
         : {})
     };
     
-    try {
       const res = await axios.post("/what_if", payload);
       setSim(res.data);
     } catch (err) {
-      alert("What-If error: " + (err.response?.data?.detail || err.message));
+      showError("What-If error: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
   };
 
   // Run PD analysis - bacteria CFU dynamics
   const runPDBacteria = async () => {
-    // Check if we have concentration-time data from simulation or need to generate from fitted data
-    let timeData, concData;
+    setLoading(true);
+    setLoadingMessage("Running PD bacteria analysis...");
     
-    if (sim && sim.time && sim.conc) {
-      // Use simulation data
-      timeData = sim.time;
-      concData = sim.conc;
-    } else if (mode === "analyze" && Array.isArray(fitParams) && fitParams.length > 0 && data.length > 0) {
-      // Use original fitted data
-      timeData = data.map(d => d.time);
-      concData = data.map(d => d.concentration);
-    } else {
-      alert("Please run PK analysis/simulation first to get concentration-time profile");
-      return;
-    }
-
-    const payload = {
-      t: timeData,
-      C_t: concData,
-      CFU0: Number(CFU0),
-      k_max: Number(kMax),
-      EC50: Number(EC50Kill),
-      hill: Number(hillKill),
-      k_grow: Number(kGrow)
-    };
-
     try {
-      const res = await axios.post("/pd/bacteria_cfu", payload);
+      // Check if we have concentration-time data from simulation or need to generate from fitted data
+      let subjectData = [];
+    
+      if (sim && sim.time && sim.conc) {
+        // Use simulation data (single subject)
+        subjectData = [{
+          subject: "Simulation",
+          timeData: sim.time,
+          concData: sim.conc
+        }];
+      } else if ((mode === "analyze" && Array.isArray(fitParams) && fitParams.length > 0 && rawData.length > 0) || 
+                 (selectedModel === "pd-only" && data.length > 0)) {
+        // Use full rawData (or data for PD-only) and group by subject
+        const dataSource = rawData;
+        const subjectGroups = {};
+        dataSource.forEach(row => {
+          const subjectId = row.subject || row.Subject || "Subject_1";
+          const timeValue = row.time;
+          const concValue = row.conc || row.concentration;
+          
+          if (!subjectGroups[subjectId]) {
+            subjectGroups[subjectId] = { times: [], concentrations: [] };
+          }
+          subjectGroups[subjectId].times.push(timeValue);
+          subjectGroups[subjectId].concentrations.push(concValue);
+        });
+        
+        subjectData = Object.entries(subjectGroups).map(([subjectId, data]) => ({
+          subject: subjectId,
+          timeData: data.times,
+          concData: data.concentrations
+        }));
+      } else {
+        showError("Please run PK analysis/simulation first to get concentration-time profile");
+        return;
+      }
+
+      const allSubjectResults = [];
+      
+      // Process each subject separately
+      // Process each subject separately
+      for (const { subject, timeData, concData } of subjectData) {
+        const payload = {
+          t: timeData,
+          C_t: concData,
+          CFU0: Number(CFU0),
+          k_max: Number(kMax),
+          EC50: Number(EC50Kill),
+          hill: Number(hillKill),
+          k_grow: Number(kGrow)
+        };
+
+        const res = await axios.post("/pd/bacteria_cfu", payload);
+        allSubjectResults.push({
+          subject: subject,
+          time: res.data.t,
+          effect: res.data.CFU,
+          concentration: concData
+        });
+      }
+      
       setPdResults({
         type: "bacteria",
-        time: res.data.t,
-        effect: res.data.CFU,
-        concentration: concData,
+        subjects: allSubjectResults,
         parameters: {
           CFU0: Number(CFU0),
           k_max: Number(kMax),
@@ -703,43 +794,81 @@ const onDrop = useCallback(async (files) => {
         }
       });
     } catch (err) {
-      alert("PD Bacteria error: " + (err.response?.data?.detail || err.message));
+      showError("PD Bacteria error: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
   };
 
   // Run PD analysis - PMM2 rescue
   const runPDPMM2 = async () => {
-    // Check if we have concentration-time data from simulation or need to generate from fitted data
-    let timeData, concData;
+    setLoading(true);
+    setLoadingMessage("Running PD PMM2 analysis...");
     
-    if (sim && sim.time && sim.conc) {
-      // Use simulation data
-      timeData = sim.time;
-      concData = sim.conc;
-    } else if (mode === "analyze" && Array.isArray(fitParams) && fitParams.length > 0 && data.length > 0) {
-      // Use original fitted data
-      timeData = data.map(d => d.time);
-      concData = data.map(d => d.concentration);
-    } else {
-      alert("Please run PK analysis/simulation first to get concentration-time profile");
-      return;
-    }
-
-    const payload = {
-      C_t: concData,
-      Emax: Number(Emax),
-      EC50: Number(EC50PMM2),
-      hill: Number(hillPMM2),
-      Emin: Number(Emin)
-    };
-
     try {
-      const res = await axios.post("/pd/pmm2_rescue", payload);
+      // Check if we have concentration-time data from simulation or need to generate from fitted data
+      let subjectData = [];
+      
+      if (sim && sim.time && sim.conc) {
+        // Use simulation data (single subject)
+        subjectData = [{
+          subject: "Simulation",
+          timeData: sim.time,
+          concData: sim.conc
+        }];
+      } else if ((mode === "analyze" && Array.isArray(fitParams) && fitParams.length > 0 && rawData.length > 0) || 
+                 (selectedModel === "pd-only" && data.length > 0)) {
+        // Use full rawData (or data for PD-only) and group by subject
+        const dataSource = rawData;
+        const subjectGroups = {};
+        dataSource.forEach(row => {
+          const subjectId = row.subject || row.Subject || "Subject_1";
+          const timeValue = row.time;
+          const concValue = row.conc || row.concentration;
+          
+          if (!subjectGroups[subjectId]) {
+            subjectGroups[subjectId] = { times: [], concentrations: [] };
+          }
+          subjectGroups[subjectId].times.push(timeValue);
+          subjectGroups[subjectId].concentrations.push(concValue);
+        });
+        
+        subjectData = Object.entries(subjectGroups).map(([subjectId, data]) => ({
+          subject: subjectId,
+          timeData: data.times,
+          concData: data.concentrations
+        }));
+      } else {
+        showError("Please run PK analysis/simulation first to get concentration-time profile");
+        return;
+      }
+
+      const allSubjectResults = [];
+      
+      // Process each subject separately
+      // Process each subject separately
+      for (const { subject, timeData, concData } of subjectData) {
+        const payload = {
+          C_t: concData,
+          Emax: Number(Emax),
+          EC50: Number(EC50PMM2),
+          hill: Number(hillPMM2),
+          Emin: Number(Emin)
+        };
+
+        const res = await axios.post("/pd/pmm2_rescue", payload);
+        allSubjectResults.push({
+          subject: subject,
+          time: timeData,
+          effect: res.data["%Activity"],
+          concentration: concData
+        });
+      }
+      
       setPdResults({
         type: "pmm2",
-        time: timeData,
-        effect: res.data["%Activity"],
-        concentration: concData,
+        subjects: allSubjectResults,
         parameters: {
           Emax: Number(Emax),
           EC50: Number(EC50PMM2),
@@ -748,7 +877,10 @@ const onDrop = useCallback(async (files) => {
         }
       });
     } catch (err) {
-      alert("PD PMM2 error: " + (err.response?.data?.detail || err.message));
+      showError("PD PMM2 error: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
   };
 
@@ -758,6 +890,61 @@ const onDrop = useCallback(async (files) => {
       await runPDBacteria();
     } else {
       await runPDPMM2();
+    }
+  };
+
+  // Download PD Report function
+  const downloadPDReport = async () => {
+    if (!pdResults) {
+      showError("Please run PD analysis first to generate a report.");
+      return;
+    }
+
+    setLoading(true);
+    setLoadingMessage("Generating PD report...");
+    
+    try {
+      // Always use rawData to ensure we get all subjects for the PDF report
+      const dataSource = rawData;
+      
+      // Prepare PD parameters based on model type
+      const pdParams = pdModelType === "bacteria" 
+        ? { CFU0, k_max: kMax, EC50: EC50Kill, hill_kill: hillKill, k_grow: kGrow }
+        : { Emax, EC50_pmm2: EC50PMM2, hill_pmm2: hillPMM2, Emin };
+
+      const payload = {
+        data: dataSource,
+        pd_type: pdModelType,
+        pd_params: pdParams,
+        metadata: {
+          study_id: selectedStudy || "Custom",
+          species: species || "Unknown",
+          dose: dose,
+          model: selectedModel === "pd-only" ? "PD-Only Analysis" : selectedModel
+        }
+      };
+
+      const response = await axios.post("/pd_report", payload, {
+        responseType: "blob", // Important for PDF downloads
+      });
+
+      // Create download link
+      const blob = new Blob([response.data], { type: "application/pdf" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `PD_Analysis_Report_${pdModelType}_${new Date().toISOString().split('T')[0]}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error("Error downloading PD report:", err);
+      showError("Error generating PD report. Please try again.");
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
   };
 
@@ -775,6 +962,21 @@ const onDrop = useCallback(async (files) => {
     setMode("analyze");
     setPdMode(false);
     setPdResults(null);
+  };
+
+  // Jump to PD section: smooth scroll to PD analysis section
+  const jumpToPD = () => {
+    const pdSection = document.querySelector('.pd-section');
+    if (pdSection) {
+      pdSection.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'start' 
+      });
+      // Also enable PD mode if it's not already enabled
+      if (!pdMode) {
+        setPdMode(true);
+      }
+    }
   };
 
   // Simple SVG plot
@@ -867,65 +1069,179 @@ const onDrop = useCallback(async (files) => {
     );
   };
 
-  // PD Plot component for visualizing pharmacodynamic effects
-  const PDPlot = ({ pdData, width=700, height=300, margin=40 }) => {
-    if (!pdData || !pdData.time || !pdData.effect || pdData.time.length !== pdData.effect.length || pdData.time.length === 0) {
+  // PD Plot component for visualizing pharmacodynamic effects - supports multiple subjects
+  const PDPlot = ({ pdData, showSeparately=false, width=700, height=300, margin=40 }) => {
+    if (!pdData || !pdData.subjects || pdData.subjects.length === 0) {
       return null;
     }
+
+    // If showing subjects separately, render individual plots
+    if (showSeparately && pdData.subjects.length > 1) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {pdData.subjects.map((subject, index) => {
+            const singleSubjectData = {
+              ...pdData,
+              subjects: [subject]
+            };
+            
+            // Calculate individual subject statistics
+            const finalEffect = subject.effect[subject.effect.length - 1];
+            const maxEffect = Math.max(...subject.effect);
+            const minEffect = Math.min(...subject.effect);
+            
+            return (
+              <div key={subject.subject} style={{ border: '1px solid #ddd', padding: '15px', borderRadius: '5px' }}>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#333' }}>
+                  Subject: {subject.subject}
+                </h4>
+                
+                {/* Individual subject statistics */}
+                <div className="kpis" style={{ marginBottom: '15px', fontSize: '12px' }}>
+                  {pdData.type === "bacteria" ? (
+                    <>
+                      <div className="kpi">Final CFU: <strong>{finalEffect.toExponential(2)}</strong></div>
+                      <div className="kpi">Log Kill: <strong>{fmt(Math.log10(pdData.parameters.CFU0) - Math.log10(finalEffect), 2)}</strong></div>
+                      <div className="kpi">Min CFU: <strong>{minEffect.toExponential(2)}</strong></div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="kpi">Max Activity: <strong>{fmt(maxEffect, 2)}%</strong></div>
+                      <div className="kpi">Final Activity: <strong>{fmt(finalEffect, 2)}%</strong></div>
+                      <div className="kpi">Min Activity: <strong>{fmt(minEffect, 2)}%</strong></div>
+                    </>
+                  )}
+                </div>
+                
+                <PDPlot pdData={singleSubjectData} showSeparately={false} width={width} height={height} margin={margin} />
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
     
-    const time = pdData.time;
-    const effect = pdData.effect;
-    const tmin = Math.min(...time), tmax = Math.max(...time);
+    // Define colors for different subjects
+    const subjectColors = [
+      "#dc3545", "#007bff", "#28a745", "#ffc107", "#6f42c1", 
+      "#fd7e14", "#20c997", "#e83e8c", "#6c757d", "#343a40"
+    ];
+    
+    // Calculate overall time range across all subjects
+    const allTimes = pdData.subjects.flatMap(subj => subj.time);
+    const tmin = Math.min(...allTimes), tmax = Math.max(...allTimes);
     const x = t => margin + (t - tmin) * (width - 2*margin) / (tmax - tmin || 1);
 
     const effectType = pdData.type;
-    let effectLabel, effectColor;
+    let effectLabel, titleText;
     
     if (effectType === "bacteria") {
-      effectLabel = "CFU";
-      effectColor = "#dc3545";
-      // Use log scale for bacteria CFU
-      const positives = effect.filter(v => v > 0);
+      effectLabel = "log10 CFU";
+      titleText = "Bacterial CFU Dynamics";
+      
+      // Calculate overall effect range across all subjects (log scale)
+      const allEffects = pdData.subjects.flatMap(subj => subj.effect);
+      const positives = allEffects.filter(v => v > 0);
       const eps = positives.length ? Math.min(...positives) * 0.01 : 1e-6;
-      const logs = effect.map(v => Math.log10(Math.max(v, eps)));
-      const emin = Math.min(...logs), emax = Math.max(...logs);
+      const allLogs = allEffects.map(v => Math.log10(Math.max(v, eps)));
+      const emin = Math.min(...allLogs), emax = Math.max(...allLogs);
       const y = e => {
         const ev = Math.log10(Math.max(e, eps));
         return height - margin - (ev - emin) * (height - 2*margin) / (emax - emin || 1);
       };
-      effectLabel = "log10 CFU";
-      const pts = time.map((t, i) => `${x(t)},${y(effect[i])}`).join(" ");
       
       return (
         <svg width={width} height={height} className="pd-chart">
           <line x1={margin} y1={height-margin} x2={width-margin} y2={height-margin} stroke="#888"/>
           <line x1={margin} y1={margin} x2={margin} y2={height-margin} stroke="#888"/>
-          <polyline fill="none" stroke={effectColor} strokeWidth="3" points={pts}/>
+          
+          {/* Plot lines for each subject */}
+          {pdData.subjects.map((subj, subjectIndex) => {
+            const color = subjectColors[subjectIndex % subjectColors.length];
+            const pts = subj.time.map((t, i) => `${x(t)},${y(subj.effect[i])}`).join(" ");
+            return (
+              <polyline 
+                key={subj.subject} 
+                fill="none" 
+                stroke={color} 
+                strokeWidth="2" 
+                points={pts}
+              />
+            );
+          })}
+          
           <text x={width/2} y={height-8} textAnchor="middle" fontSize="12">Time (h)</text>
           <text x={16} y={margin-10} fontSize="12">{effectLabel}</text>
-          <text x={width - margin} y={margin - 12} textAnchor="end" fontSize="12" fill={effectColor}>
-            Bacterial CFU Dynamics
+          <text x={width - margin} y={margin - 12} textAnchor="end" fontSize="12">
+            {titleText} ({pdData.subjects.length} subject{pdData.subjects.length !== 1 ? 's' : ''})
           </text>
+          
+          {/* Legend */}
+          {pdData.subjects.length > 1 && (
+            <g transform={`translate(${margin + 20}, ${margin + 20})`}>
+              {pdData.subjects.slice(0, 5).map((subj, i) => (
+                <g key={subj.subject} transform={`translate(0, ${i * 15})`}>
+                  <line x1="0" y1="0" x2="15" y2="0" stroke={subjectColors[i % subjectColors.length]} strokeWidth="2"/>
+                  <text x="20" y="4" fontSize="10" fill="#333">{subj.subject}</text>
+                </g>
+              ))}
+              {pdData.subjects.length > 5 && (
+                <text x="0" y={5 * 15 + 4} fontSize="10" fill="#666">...and {pdData.subjects.length - 5} more</text>
+              )}
+            </g>
+          )}
         </svg>
       );
     } else {
       // PMM2 rescue - linear scale (percentage)
       effectLabel = "%Activity";
-      effectColor = "#28a745";
-      const emin = 0, emax = Math.max(...effect, 100) * 1.1;
+      titleText = "PMM2 Activity Rescue";
+      
+      // Calculate overall effect range across all subjects
+      const allEffects = pdData.subjects.flatMap(subj => subj.effect);
+      const emin = 0, emax = Math.max(...allEffects, 100) * 1.1;
       const y = e => height - margin - (e - emin) * (height - 2*margin) / (emax - emin || 1);
-      const pts = time.map((t, i) => `${x(t)},${y(effect[i])}`).join(" ");
       
       return (
         <svg width={width} height={height} className="pd-chart">
           <line x1={margin} y1={height-margin} x2={width-margin} y2={height-margin} stroke="#888"/>
           <line x1={margin} y1={margin} x2={margin} y2={height-margin} stroke="#888"/>
-          <polyline fill="none" stroke={effectColor} strokeWidth="3" points={pts}/>
+          
+          {/* Plot lines for each subject */}
+          {pdData.subjects.map((subj, subjectIndex) => {
+            const color = subjectColors[subjectIndex % subjectColors.length];
+            const pts = subj.time.map((t, i) => `${x(t)},${y(subj.effect[i])}`).join(" ");
+            return (
+              <polyline 
+                key={subj.subject} 
+                fill="none" 
+                stroke={color} 
+                strokeWidth="2" 
+                points={pts}
+              />
+            );
+          })}
+          
           <text x={width/2} y={height-8} textAnchor="middle" fontSize="12">Time (h)</text>
           <text x={16} y={margin-10} fontSize="12">{effectLabel}</text>
-          <text x={width - margin} y={margin - 12} textAnchor="end" fontSize="12" fill={effectColor}>
-            PMM2 Activity Rescue
+          <text x={width - margin} y={margin - 12} textAnchor="end" fontSize="12">
+            {titleText} ({pdData.subjects.length} subject{pdData.subjects.length !== 1 ? 's' : ''})
           </text>
+          
+          {/* Legend */}
+          {pdData.subjects.length > 1 && (
+            <g transform={`translate(${margin + 20}, ${margin + 20})`}>
+              {pdData.subjects.slice(0, 5).map((subj, i) => (
+                <g key={subj.subject} transform={`translate(0, ${i * 15})`}>
+                  <line x1="0" y1="0" x2="15" y2="0" stroke={subjectColors[i % subjectColors.length]} strokeWidth="2"/>
+                  <text x="20" y="4" fontSize="10" fill="#333">{subj.subject}</text>
+                </g>
+              ))}
+              {pdData.subjects.length > 5 && (
+                <text x="0" y={5 * 15 + 4} fontSize="10" fill="#666">...and {pdData.subjects.length - 5} more</text>
+              )}
+            </g>
+          )}
         </svg>
       );
     }
@@ -966,6 +1282,140 @@ const onDrop = useCallback(async (files) => {
 
   return (
     <div className="container">
+      {loading && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 9999
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            padding: '20px',
+            borderRadius: '8px',
+            textAlign: 'center',
+            boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{
+              fontSize: '16px',
+              fontWeight: 'bold',
+              marginBottom: '10px'
+            }}>
+              {loadingMessage || "Loading..."}
+            </div>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              border: '4px solid #f3f3f3',
+              borderTop: '4px solid #0a58ca',
+              borderRadius: '50%',
+              animation: 'spin 1s linear infinite',
+              margin: '0 auto'
+            }}></div>
+          </div>
+        </div>
+      )}
+      
+      {showErrorPopup && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 10000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            padding: '24px',
+            borderRadius: '12px',
+            maxWidth: '500px',
+            width: '90%',
+            maxHeight: '400px',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
+            border: '1px solid #e5e7eb'
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '16px'
+            }}>
+              <h3 style={{
+                margin: 0,
+                color: '#dc2626',
+                fontSize: '18px',
+                fontWeight: 'bold'
+              }}>
+                Error
+              </h3>
+              <button
+                onClick={() => setShowErrorPopup(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: '#6b7280',
+                  padding: '0',
+                  width: '30px',
+                  height: '30px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+                onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
+                onMouseLeave={(e) => e.target.style.backgroundColor = 'transparent'}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{
+              color: '#374151',
+              lineHeight: '1.5',
+              marginBottom: '20px',
+              overflowY: 'auto',
+              maxHeight: '250px'
+            }}>
+              {errorMessage}
+            </div>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'flex-end'
+            }}>
+              <button
+                onClick={() => setShowErrorPopup(false)}
+                style={{
+                  padding: '8px 16px',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500'
+                }}
+                onMouseEnter={(e) => e.target.style.backgroundColor = '#b91c1c'}
+                onMouseLeave={(e) => e.target.style.backgroundColor = '#dc2626'}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
        {selectedModel && (
         <div style={{marginBottom: 10}}>
           <button
@@ -1011,9 +1461,9 @@ const onDrop = useCallback(async (files) => {
           className="model-select"
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(3, minmax(220px, 1fr))",
+            gridTemplateColumns: "repeat(4, minmax(200px, 1fr))",
             gap: 12,
-            maxWidth: 860
+            maxWidth: 1000
           }}
         >
           <button onClick={() => setSelectedModel("one")}>
@@ -1028,9 +1478,12 @@ const onDrop = useCallback(async (files) => {
           <button onClick={() => setSelectedModel("three")}>
             Three-Compartment Model
           </button>
+          <button onClick={() => setSelectedModel("pd-only")}>
+            PD Analysis from data
+          </button>
           <button
             onClick={() => setShowComparePage(true)}
-            style={{ gridColumn: "2 / 3" }}
+            style={{ gridColumn: "2 / 4", gridColumnEnd: "4" }}
           >
             Compare Regimens
           </button>
@@ -1042,9 +1495,326 @@ const onDrop = useCallback(async (files) => {
       <h2 className="text-center">
         {selectedModel === "one" ? "One-Compartment Model" :
          selectedModel === "two" ? "Two-Compartment Model" :
-                                   "Three-Compartment Model"}
+         selectedModel === "three" ? "Three-Compartment Model" :
+         "PD Analysis from data"}
       </h2>
 
+      {/* PD-Only Analysis Section */}
+      {selectedModel === "pd-only" && (
+        <div className="pd-only-section">
+          <div className="note" style={{ marginBottom: 20, padding: 15, backgroundColor: "#f8f9fa", border: "1px solid #dee2e6", borderRadius: 5 }}>
+            <strong>PD Analysis from Raw Data</strong><br/>
+            Upload your concentration-time data and perform pharmacodynamic analysis directly without requiring PK model fitting.
+            The raw uploaded data will be used as concentration inputs for PD modeling.
+          </div>
+
+          {/* File Upload */}
+          <div {...getRootProps()} className="dropzone">
+            <input {...getInputProps()} />
+            <p>
+              📁 <strong>Drag & drop</strong> a CSV/Excel file here, or <strong>click to browse</strong>
+            </p>
+            <p className="dropzone-hint">
+              Expected format: columns for Time, Concentration, and optionally Subject
+            </p>
+          </div>
+
+          {/* Example Study Selector */}
+          <div className="input-row">
+            <label>
+              Load Example:&nbsp;
+              <select
+                value={selectedStudy}
+                onChange={(e) => loadStudy(e.target.value)}
+              >
+                <option value="">— select study —</option>
+                {studies.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {/* Display uploaded data */}
+          {data.length > 0 && (
+            <div className="preview-section">
+              <h3>Data Preview</h3>
+              <table className="preview-table">
+                <thead>
+                  <tr>
+                    {Object.keys(data[0]).map((col) => (
+                      <th key={col}>{col}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.map((row, i) => (
+                    <tr key={i}>
+                      {Object.values(row).map((val, j) => (
+                        <td key={j}>{val}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Warnings */}
+          {warnings.length > 0 && (
+            <div className="warnings">
+              <h4>⚠️ Warnings</h4>
+              <ul>
+                {warnings.map((w, i) => <li key={i}>{w}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {/* PD Analysis Controls - only show if we have data */}
+          {data.length > 0 && (
+            <div className="pd-controls" style={{ marginTop: 20, padding: 15, border: "1px solid #ddd", borderRadius: 5 }}>
+              <h4>Pharmacodynamic Analysis</h4>
+              
+              {/* PD Model Type Selection */}
+              <div className="input-row">
+                <label>
+                  <strong>PD Model:</strong>&nbsp;
+                  <select
+                    value={pdModelType}
+                    onChange={(e) => setPdModelType(e.target.value)}
+                  >
+                    <option value="bacteria">Bacteria CFU Dynamics</option>
+                    <option value="pmm2">PMM2 Activity Rescue</option>
+                  </select>
+                </label>
+              </div>
+
+              {/* Bacteria CFU parameters */}
+              {pdModelType === "bacteria" && (
+                <div className="pd-params">
+                  <h5>Bacteria CFU Dynamics Parameters</h5>
+                  <div className="input-row">
+                      <label>
+                        Initial CFU (CFU0):&nbsp;
+                        <input
+                          type="number"
+                          value={CFU0}
+                          onChange={(e) => setCFU0(parseFloat(e.target.value))}
+                          step="1000"
+                          style={{width: 100}}
+                        />
+                      </label>
+                    </div>
+                    <div className="input-row">
+                      <label>
+                        Max Kill Rate (k_max):&nbsp;
+                        <input
+                          type="number"
+                          value={kMax}
+                          onChange={(e) => setKMax(parseFloat(e.target.value))}
+                          step="0.1"
+                          style={{width: 80}}
+                        />
+                        &nbsp;1/h
+                      </label>
+                    </div>
+                    <div className="input-row">
+                      <label>
+                        EC50 for Kill:&nbsp;
+                        <input
+                          type="number"
+                          value={EC50Kill}
+                          onChange={(e) => setEC50Kill(parseFloat(e.target.value))}
+                          step="0.1"
+                          style={{width: 80}}
+                        />
+                        &nbsp;mg/L
+                      </label>
+                    </div>
+                    <div className="input-row">
+                      <label>
+                        Hill Coefficient:&nbsp;
+                        <input
+                          type="number"
+                          value={hillKill}
+                          onChange={(e) => setHillKill(parseFloat(e.target.value))}
+                          step="0.1"
+                          style={{width: 80}}
+                        />
+                      </label>
+                    </div>
+                    <div className="input-row">
+                      <label>
+                        Growth Rate (k_grow):&nbsp;
+                        <input
+                          type="number"
+                          value={kGrow}
+                          onChange={(e) => setKGrow(parseFloat(e.target.value))}
+                          step="0.01"
+                          style={{width: 80}}
+                        />
+                        &nbsp;1/h
+                      </label>
+                    </div>
+                </div>
+              )}
+
+              {/* PMM2 parameters */}
+              {pdModelType === "pmm2" && (
+                <div className="pd-params">
+                  <h5>PMM2 Activity Rescue Parameters</h5>
+                  <div className="input-row">
+                      <label>
+                        Max Effect (Emax):&nbsp;
+                        <input
+                          type="number"
+                          value={Emax}
+                          onChange={(e) => setEmax(parseFloat(e.target.value))}
+                          step="1"
+                          style={{width: 80}}
+                        />
+                        &nbsp;%
+                      </label>
+                    </div>
+                    <div className="input-row">
+                      <label>
+                        EC50:&nbsp;
+                        <input
+                          type="number"
+                          value={EC50PMM2}
+                          onChange={(e) => setEC50PMM2(parseFloat(e.target.value))}
+                          step="0.1"
+                          style={{width: 80}}
+                        />
+                        &nbsp;mg/L
+                      </label>
+                    </div>
+                    <div className="input-row">
+                      <label>
+                        Hill Coefficient:&nbsp;
+                        <input
+                          type="number"
+                          value={hillPMM2}
+                          onChange={(e) => setHillPMM2(parseFloat(e.target.value))}
+                          step="0.1"
+                          style={{width: 80}}
+                        />
+                      </label>
+                    </div>
+                    <div className="input-row">
+                      <label>
+                        Baseline Effect (Emin):&nbsp;
+                        <input
+                          type="number"
+                          value={Emin}
+                          onChange={(e) => setEmin(parseFloat(e.target.value))}
+                          step="1"
+                          style={{width: 80}}
+                        />
+                        &nbsp;%
+                      </label>
+                    </div>
+                </div>
+              )}
+
+              {/* Run PD Analysis Button */}
+              <div className="input-row" style={{ marginTop: 15 }}>
+                <button 
+                  onClick={runPDAnalysis}
+                  disabled={data.length === 0}
+                  className="primary-button"
+                >
+                  Run PD Analysis
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* PD Results Display */}
+          {pdResults && (
+            <div className="pd-results" style={{marginTop: 15}}>
+              <h5>PD Results ({pdResults.subjects.length} subject{pdResults.subjects.length !== 1 ? 's' : ''})</h5>
+              <div className="kpis">
+                {pdResults.type === "bacteria" && (
+                  <>
+                    <div className="kpi">Initial CFU: <strong>{pdResults.parameters.CFU0.toExponential(2)}</strong></div>
+                    {pdResults.subjects.length === 1 ? (
+                      <>
+                        <div className="kpi">Final CFU: <strong>{pdResults.subjects[0].effect[pdResults.subjects[0].effect.length - 1].toExponential(2)}</strong></div>
+                        <div className="kpi">Log Kill: <strong>{fmt(Math.log10(pdResults.parameters.CFU0) - Math.log10(pdResults.subjects[0].effect[pdResults.subjects[0].effect.length - 1]), 2)}</strong></div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="kpi">Avg Final CFU: <strong>{(pdResults.subjects.reduce((sum, subj) => sum + subj.effect[subj.effect.length - 1], 0) / pdResults.subjects.length).toExponential(2)}</strong></div>
+                        <div className="kpi">Avg Log Kill: <strong>{fmt(pdResults.subjects.reduce((sum, subj) => sum + (Math.log10(pdResults.parameters.CFU0) - Math.log10(subj.effect[subj.effect.length - 1])), 0) / pdResults.subjects.length, 2)}</strong></div>
+                        <div className="kpi">Range Final CFU: <strong>{Math.min(...pdResults.subjects.map(s => s.effect[s.effect.length - 1])).toExponential(2)} - {Math.max(...pdResults.subjects.map(s => s.effect[s.effect.length - 1])).toExponential(2)}</strong></div>
+                      </>
+                    )}
+                  </>
+                )}
+                {pdResults.type === "pmm2" && (
+                  <>
+                    {pdResults.subjects.length === 1 ? (
+                      <>
+                        <div className="kpi">Max Activity: <strong>{fmt(Math.max(...pdResults.subjects[0].effect), 2)}%</strong></div>
+                        <div className="kpi">Final Activity: <strong>{fmt(pdResults.subjects[0].effect[pdResults.subjects[0].effect.length - 1], 2)}%</strong></div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="kpi">Avg Max Activity: <strong>{fmt(pdResults.subjects.reduce((sum, subj) => sum + Math.max(...subj.effect), 0) / pdResults.subjects.length, 2)}%</strong></div>
+                        <div className="kpi">Avg Final Activity: <strong>{fmt(pdResults.subjects.reduce((sum, subj) => sum + subj.effect[subj.effect.length - 1], 0) / pdResults.subjects.length, 2)}%</strong></div>
+                        <div className="kpi">Range Max Activity: <strong>{fmt(Math.min(...pdResults.subjects.map(s => Math.max(...s.effect))), 2)}% - {fmt(Math.max(...pdResults.subjects.map(s => Math.max(...s.effect))), 2)}%</strong></div>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Download PD Report Button */}
+              <div style={{ marginTop: 15, marginBottom: 15 }}>
+                <button 
+                  onClick={downloadPDReport}
+                  style={{
+                    backgroundColor: '#007bff',
+                    color: 'white',
+                    border: 'none',
+                    padding: '8px 16px',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '14px'
+                  }}
+                  onMouseOver={(e) => e.target.style.backgroundColor = '#0056b3'}
+                  onMouseOut={(e) => e.target.style.backgroundColor = '#007bff'}
+                >
+                  📄 Download PD Report
+                </button>
+              </div>
+
+              {/* Subject separation toggle and plot */}
+              {pdResults.subjects.length > 1 && (
+                <div style={{ marginBottom: '15px' }}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={showSubjectsSeparately}
+                      onChange={(e) => setShowSubjectsSeparately(e.target.checked)}
+                      style={{ marginRight: '8px' }}
+                    />
+                    Show subjects separately
+                  </label>
+                </div>
+              )}
+              <PDPlot pdData={pdResults} showSeparately={showSubjectsSeparately} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Regular PK Analysis Sections - only show for non-PD-only models */}
+      {selectedModel !== "pd-only" && (
+        <>
           {/* Example Study Selector */}
           <div className="input-row">
             <label>
@@ -1414,7 +2184,9 @@ const onDrop = useCallback(async (files) => {
           {mode === "analyze" && (
             <div {...getRootProps()} className="dropzone">
               <input {...getInputProps()} />
-              <p>Drag &amp; drop CSV/Excel here, or click to select</p>
+              <p>
+              📁 <strong>Drag & drop</strong> a CSV/Excel file here, or <strong>click to browse</strong>
+              </p>
             </div>
           )}
 
@@ -1901,6 +2673,29 @@ const onDrop = useCallback(async (files) => {
           </div>
           )}
 
+          {/* Jump to PD Button */}
+          {mode === "analyze" && Array.isArray(fitParams) && fitParams.length > 0 && (
+            <div style={{ marginTop: 20, marginBottom: 15, textAlign: 'center' }}>
+              <button 
+                onClick={jumpToPD}
+                style={{
+                  backgroundColor: '#28a745',
+                  color: 'white',
+                  border: 'none',
+                  padding: '10px 20px',
+                  borderRadius: '5px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: 'bold'
+                }}
+                onMouseOver={(e) => e.target.style.backgroundColor = '#218838'}
+                onMouseOut={(e) => e.target.style.backgroundColor = '#28a745'}
+              >
+                📊 Jump to PD Analysis
+              </button>
+            </div>
+          )}
+
           {/* Results */}
           {mode === "analyze" && Array.isArray(fitParams) &&
             fitParams.map((r) => {
@@ -2127,29 +2922,85 @@ const onDrop = useCallback(async (files) => {
                   
                   {pdResults && (
                     <div className="pd-results" style={{marginTop: 15}}>
-                      <h5>PD Results</h5>
+                      <h5>PD Results ({pdResults.subjects.length} subject{pdResults.subjects.length !== 1 ? 's' : ''})</h5>
                       <div className="kpis">
                         {pdResults.type === "bacteria" && (
                           <>
                             <div className="kpi">Initial CFU: <strong>{pdResults.parameters.CFU0.toExponential(2)}</strong></div>
-                            <div className="kpi">Final CFU: <strong>{pdResults.effect[pdResults.effect.length - 1].toExponential(2)}</strong></div>
-                            <div className="kpi">Log Kill: <strong>{fmt(Math.log10(pdResults.parameters.CFU0) - Math.log10(pdResults.effect[pdResults.effect.length - 1]), 2)}</strong></div>
+                            {pdResults.subjects.length === 1 ? (
+                              <>
+                                <div className="kpi">Final CFU: <strong>{pdResults.subjects[0].effect[pdResults.subjects[0].effect.length - 1].toExponential(2)}</strong></div>
+                                <div className="kpi">Log Kill: <strong>{fmt(Math.log10(pdResults.parameters.CFU0) - Math.log10(pdResults.subjects[0].effect[pdResults.subjects[0].effect.length - 1]), 2)}</strong></div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="kpi">Avg Final CFU: <strong>{(pdResults.subjects.reduce((sum, subj) => sum + subj.effect[subj.effect.length - 1], 0) / pdResults.subjects.length).toExponential(2)}</strong></div>
+                                <div className="kpi">Avg Log Kill: <strong>{fmt(pdResults.subjects.reduce((sum, subj) => sum + (Math.log10(pdResults.parameters.CFU0) - Math.log10(subj.effect[subj.effect.length - 1])), 0) / pdResults.subjects.length, 2)}</strong></div>
+                                <div className="kpi">Range Final CFU: <strong>{Math.min(...pdResults.subjects.map(s => s.effect[s.effect.length - 1])).toExponential(2)} - {Math.max(...pdResults.subjects.map(s => s.effect[s.effect.length - 1])).toExponential(2)}</strong></div>
+                              </>
+                            )}
                           </>
                         )}
                         {pdResults.type === "pmm2" && (
                           <>
-                            <div className="kpi">Max Activity: <strong>{fmt(Math.max(...pdResults.effect), 2)}%</strong></div>
-                            <div className="kpi">Final Activity: <strong>{fmt(pdResults.effect[pdResults.effect.length - 1], 2)}%</strong></div>
+                            {pdResults.subjects.length === 1 ? (
+                              <>
+                                <div className="kpi">Max Activity: <strong>{fmt(Math.max(...pdResults.subjects[0].effect), 2)}%</strong></div>
+                                <div className="kpi">Final Activity: <strong>{fmt(pdResults.subjects[0].effect[pdResults.subjects[0].effect.length - 1], 2)}%</strong></div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="kpi">Avg Max Activity: <strong>{fmt(pdResults.subjects.reduce((sum, subj) => sum + Math.max(...subj.effect), 0) / pdResults.subjects.length, 2)}%</strong></div>
+                                <div className="kpi">Avg Final Activity: <strong>{fmt(pdResults.subjects.reduce((sum, subj) => sum + subj.effect[subj.effect.length - 1], 0) / pdResults.subjects.length, 2)}%</strong></div>
+                                <div className="kpi">Range Max Activity: <strong>{fmt(Math.min(...pdResults.subjects.map(s => Math.max(...s.effect))), 2)}% - {fmt(Math.max(...pdResults.subjects.map(s => Math.max(...s.effect))), 2)}%</strong></div>
+                              </>
+                            )}
                           </>
                         )}
                       </div>
-                      <PDPlot pdData={pdResults} />
+
+                      {/* Download PD Report Button */}
+                      <div style={{ marginTop: 15, marginBottom: 15 }}>
+                        <button 
+                          onClick={downloadPDReport}
+                          style={{
+                            backgroundColor: '#007bff',
+                            color: 'white',
+                            border: 'none',
+                            padding: '8px 16px',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '14px'
+                          }}
+                          onMouseOver={(e) => e.target.style.backgroundColor = '#0056b3'}
+                          onMouseOut={(e) => e.target.style.backgroundColor = '#007bff'}
+                        >
+                          📄 Download PD Report
+                        </button>
+                      </div>
+
+                      {pdResults.subjects.length > 1 && (
+                        <div style={{ marginBottom: '15px' }}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={showSubjectsSeparately}
+                              onChange={(e) => setShowSubjectsSeparately(e.target.checked)}
+                              style={{ marginRight: '8px' }}
+                            />
+                            Show subjects separately
+                          </label>
+                        </div>
+                      )}
+                      <PDPlot pdData={pdResults} showSeparately={showSubjectsSeparately} />
                     </div>
                   )}
                 </>
               )}
             </div>
           )}
+        </>
+      )}
         </>
       )}
     </div>

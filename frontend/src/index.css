@@ -428,6 +428,14 @@ button[title="Back to Home"]:hover{ color: var(--primary-800); text-decoration-t
 .help-badge:hover{ box-shadow: var(--shadow-2); }
 
 .preview-section { overflow: hidden; }
+
+/* -------------------------------------------------------
+   Loading Spinner Animation
+------------------------------------------------------- */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
 .preview-section .preview-table { width:100%; table-layout:fixed; }
 .preview-section .preview-table th,
 .preview-section .preview-table td { white-space:nowrap; }

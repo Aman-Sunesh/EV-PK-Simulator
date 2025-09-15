@@ -85,9 +85,7 @@ from diagnostics import plot_residuals, plot_vpc
 import base64
 
 # Import PD models
-from pd_models import (
-    k_kill_conc, bacteria_cfu_dynamics, hill_emax, pmm2_rescue_activity
-)
+from pd_models import bacteria_cfu_dynamics, pmm2_rescue_activity
 
 static_dir = "./static"
 

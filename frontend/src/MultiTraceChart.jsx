@@ -12,14 +12,15 @@ export default function MultiTraceChart({
   legendColumns = 1,
 }) {
 
-  if (!Array.isArray(series) || series.length === 0) {
-    return <div style={{fontSize:12, color:"#6b7280"}}>No series to display yet.</div>;
-  }
+  // detect empty/invalid series but don't return early — hooks must run
+  const noSeries = !Array.isArray(series) || series.length === 0;
 
-  const allX = series.flatMap(s => s.time ?? []);
-  const allY = series.flatMap(s => s.conc ?? []);
-  const xmin = Math.min(...allX), xmax = Math.max(...allX);
-  const ymin = 0, ymax = Math.max(1e-9, Math.max(...allY));
+  const allX = Array.isArray(series) ? series.flatMap(s => s.time ?? []) : [];
+  const allY = Array.isArray(series) ? series.flatMap(s => s.conc ?? []) : [];
+  const xmin = allX.length ? Math.min(...allX) : 0;
+  const xmax = allX.length ? Math.max(...allX) : 1;
+  const ymin = 0;
+  const ymax = allY.length ? Math.max(1e-9, Math.max(...allY)) : 1;
 
   // --- axis tick helpers ---
   const niceNum = (range, round) => {
@@ -124,6 +125,10 @@ export default function MultiTraceChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [JSON.stringify(series), xNice.min, xNice.max, yNice.min, yNice.max]
   );
+
+  if (noSeries) {
+    return <div style={{fontSize:12, color:"#6b7280"}}>No series to display yet.</div>;
+  }
 
   return (
     <svg width={width} height={height} role="img" aria-label={ariaTitle || "PK comparison chart"}>

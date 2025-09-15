@@ -238,52 +238,57 @@ export default function CompareDemo() {
 
       {/* Shared settings */}
       <div className="input-row" style={{display:"flex",flexWrap:"wrap",gap:12}}>
-        <label>Model:&nbsp;
-          <select value={model} onChange={e=>setModel(e.target.value)}>
-            <option value="2c">2-compartment</option>
-            <option value="3c">3-compartment</option>
-            <option value="1c">1-compartment</option>
-          </select>
-        </label>
-        <label>Route:&nbsp;
-          <select value={route} onChange={e=>setRoute(e.target.value)}>
-            <option value="iv_bolus">IV bolus</option>
-            <option value="iv_infusion">IV infusion</option>
-            <option value="oral">Oral</option>
-            <option value="sc">SC</option>
-          </select>
-        </label>
-        <label>Vd (L):&nbsp;
-          <input type="number" value={Vd} onChange={e=>setVd(+e.target.value)} style={{width:90}}/>
-        </label>
-        <label>kel (1/h):&nbsp;
-          <input type="number" value={kel} step="0.01" onChange={e=>setKel(+e.target.value)} style={{width:90}}/>
-        </label>
-        <label>τ (h):&nbsp;
-          <input type="number" value={tau} step="0.5" onChange={e=>setTau(+e.target.value)} style={{width:80}}/>
-        </label>
-        <label>#doses:&nbsp;
-          <input type="number" value={count} onChange={e=>setCount(+e.target.value)} style={{width:80}}/>
+        <label>start (h):&nbsp;
+          <input
+            type="number"
+            value={start}
+            onChange={e=>setStart(+e.target.value)}
+            style={{width:90}}
+          />
         </label>
         <label>t_end (h):&nbsp;
-          <input type="number" value={tEnd} onChange={e=>setTEnd(+e.target.value)} style={{width:90}}/>
+          <input
+            type="number"
+            value={tEnd}
+            onChange={e=>setTEnd(+e.target.value)}
+            style={{width:90}}
+          />
         </label>
         <label>dt (h):&nbsp;
-          <input type="number" value={dt} step="0.01" onChange={e=>setDt(+e.target.value)} style={{width:80}}/>
+          <input
+            type="number"
+            value={dt}
+            step="0.01"
+            onChange={e=>setDt(+e.target.value)}
+            style={{width:80}}
+          />
         </label>
-        {route==="iv_infusion" && (
-          <label>Tinf (h):&nbsp;
-            <input type="number" value={Tinf} step="0.1" onChange={e=>setTinf(+e.target.value)} style={{width:90}}/>
-          </label>
-        )}
       </div>
 
       {/* Regimen rows */}
-      <div style={{marginTop:10}}>
-        <table className="preview-table" style={{width:"100%"}}>
-          <thead>
+      <div style={{ marginTop: 10, overflowX: "auto" }}>
+        <table
+          className="preview-table"
+          style={{ width: "100%", minWidth: 1280, tableLayout: "fixed" }}
+        >
+          <colgroup>
+            <col style={{ width: 240 }} />  {/* Label */}
+            <col style={{ width: 120 }} />  {/* Model */}
+            <col style={{ width: 120 }} />  {/* Route */}
+            <col style={{ width: 90  }} />  {/* Vd */}
+            <col style={{ width: 100 }} />  {/* kel */}
+            <col style={{ width: 80  }} />  {/* τ */}
+            <col style={{ width: 90  }} />  {/* #doses */}
+            <col style={{ width: 90  }} />  {/* Tinf */}
+            <col style={{ width: 85  }} />  {/* Units */}
+            <col style={{ width: 100 }} />  {/* Dose */}
+            <col style={{ width: 110 }} />  {/* Weight */}
+            <col style={{ width: 170 }} />  {/* Optimize Cmax_ss */}
+            <col style={{ width: 110 }} />  {/* Remove btn */}
+          </colgroup>
+            <thead>
             <tr>
-              <th style={{width:"22%"}}>Label</th>
+              <th>Label</th>
               <th>Model</th>
               <th>Route</th>
               <th>Vd (L)</th>
@@ -295,7 +300,6 @@ export default function CompareDemo() {
               <th>Dose</th>
               <th>Weight (kg)</th>
               <th>Optimize Cmax_ss</th>
-              <th>Advanced</th>
               <th></th>
             </tr>
           </thead>
@@ -306,9 +310,13 @@ export default function CompareDemo() {
                       const c=[...rows]; c[i]={...c[i],label:e.target.value}; setRows(c);
                     }} style={{width:"100%"}}/></td>
                 <td>
-                  <select value={r.model} onChange={e=>{
-                    const c=[...rows]; c[i]={...c[i],model:e.target.value}; setRows(c);
-                  }}>
+                  <select
+                    value={r.model}
+                    onChange={e=>{
+                      const c=[...rows]; c[i]={...c[i],model:e.target.value}; setRows(c);
+                    }}
+                    style={{ width: "100%", minWidth: 110, fontSize: "0.95rem", padding: "6px 8px" }}
+                  >
                     <option value="">(inherit)</option>
                     <option value="1c">1-compartment</option>
                     <option value="2c">2-compartment</option>
@@ -327,35 +335,63 @@ export default function CompareDemo() {
                   </select>
                 </td>
                 <td>
-                  <input type="number" placeholder={String(Vd)}
-                    value={r.Vd} onChange={e=>{
+                  <input
+                    type="number"
+                    placeholder={String(Vd)}
+                    value={r.Vd}
+                    onChange={e=>{
                       const c=[...rows]; c[i]={...c[i],Vd:e.target.value}; setRows(c);
-                    }} style={{width:90}}/>
+                    }}
+                    style={{ width: "100%" }}
+                  />
                 </td>
                 <td>
-                  <input type="number" step="0.01" placeholder={String(kel)}
-                    value={r.kel} onChange={e=>{
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder={String(kel)}
+                    value={r.kel}
+                    onChange={e=>{
                       const c=[...rows]; c[i]={...c[i],kel:e.target.value}; setRows(c);
-                    }} style={{width:90}}/>
+                    }}
+                    style={{ width: "100%" }}
+                  />
                 </td>
                 <td>
-                  <input type="number" step="0.5" placeholder={String(tau)}
-                    value={r.tau} onChange={e=>{
+                  <input
+                    type="number"
+                    step="0.5"
+                    placeholder={String(tau)}
+                    value={r.tau}
+                    onChange={e=>{
                       const c=[...rows]; c[i]={...c[i],tau:e.target.value}; setRows(c);
-                    }} style={{width:80}}/>
+                    }}
+                    style={{ width: "100%" }}
+                  />
                 </td>
                 <td>
-                  <input type="number" placeholder={String(count)}
-                    value={r.count} onChange={e=>{
+                  <input
+                    type="number"
+                    placeholder={String(count)}
+                    value={r.count}
+                    onChange={e=>{
                       const c=[...rows]; c[i]={...c[i],count:e.target.value}; setRows(c);
-                    }} style={{width:80}}/>
+                    }}
+                    style={{ width: "100%" }}
+                  />
                 </td>
                 <td>
                   {((r.route || route) === "iv_infusion") ? (
-                    <input type="number" step="0.1" placeholder={String(Tinf)}
-                      value={r.Tinf} onChange={e=>{
+                    <input
+                      type="number"
+                      step="0.1"
+                      placeholder={String(Tinf)}
+                      value={r.Tinf}
+                      onChange={e=>{
                         const c=[...rows]; c[i]={...c[i],Tinf:e.target.value}; setRows(c);
-                      }} style={{width:80}}/>
+                      }}
+                      style={{ width: "100%" }}
+                    />
                   ) : <span style={{color:"#888"}}>—</span>}
                 </td>
                 <td>
@@ -366,58 +402,59 @@ export default function CompareDemo() {
                     <option value="mg/kg">mg/kg</option>
                   </select>
                 </td>
-                <td><input type="number" value={r.dose} onChange={e=>{
-                      const c=[...rows]; c[i]={...c[i],dose:+e.target.value}; setRows(c);
-                    }} style={{width:90}}/></td>
                 <td>
-                  <input type="number" disabled={r.units!=="mg/kg"} value={r.weightKg}
-                    onChange={e=>{const c=[...rows]; c[i]={...c[i],weightKg:+e.target.value}; setRows(c);}}
-                    style={{width:90}}/>
+                  <input
+                    type="number"
+                    value={r.dose}
+                    onChange={e=>{
+                      const c=[...rows]; c[i]={...c[i],dose:+e.target.value}; setRows(c);
+                    }}
+                    style={{ width: "100%" }}
+                  />
                 </td>
                 <td>
-                  <label style={{display:"flex",gap:6,alignItems:"center"}}>
-                    <input type="checkbox" checked={r.optimize}
-                      onChange={e=>{const c=[...rows]; c[i]={...c[i],optimize:e.target.checked}; setRows(c);}}/>
-                    <input type="number" placeholder="target" value={r.target}
-                      disabled={!r.optimize || ( (r.route||route)!=="iv_bolus") || ((r.model||model)!=="1c")}
-                      onChange={e=>{const c=[...rows]; c[i]={...c[i],target:e.target.value}; setRows(c);}}
-                      style={{width:80}}/>
+                  <input
+                    type="number"
+                    disabled={r.units!=="mg/kg"}
+                    value={r.weightKg}
+                    onChange={e=>{
+                      const c=[...rows]; c[i]={...c[i],weightKg:+e.target.value}; setRows(c);
+                    }}
+                    style={{ width: "100%" }}
+                  />
+                </td>
+                <td>
+                  <label style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 6, alignItems: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={r.optimize}
+                      onChange={e=>{
+                        const c=[...rows]; c[i]={...c[i],optimize:e.target.checked}; setRows(c);
+                      }}
+                    />
+                    <input
+                      type="number"
+                      placeholder="target"
+                      value={r.target}
+                      disabled={
+                        !r.optimize ||
+                        ((r.route||route)!=="iv_bolus") ||
+                        ((r.model||model)!=="1c")
+                      }
+                      onChange={e=>{
+                        const c=[...rows]; c[i]={...c[i],target:e.target.value}; setRows(c);
+                      }}
+                      style={{ width: "100%" }}
+                    />
                   </label>
                 </td>
                 <td>
-                  <details>
-                    <summary>edit…</summary>
-                    <div style={{display:"grid", gridTemplateColumns:"repeat(3, minmax(120px,1fr))", gap:8, marginTop:6}}>
-                      <label>Route&nbsp;
-                        <select value={r.route}
-                          onChange={e=>{const c=[...rows]; c[i]={...c[i],route:e.target.value}; setRows(c);}}>
-                          <option value="iv_bolus">IV bolus</option>
-                          <option value="iv_infusion">IV infusion</option>
-                        </select>
-                      </label>
-                      <label>τ (h)&nbsp;
-                        <input type="number" step="0.5" value={r.tau}
-                          onChange={e=>{const c=[...rows]; c[i]={...c[i],tau:+e.target.value}; setRows(c);}}/>
-                      </label>
-                      <label>#doses&nbsp;
-                        <input type="number" value={r.count}
-                          onChange={e=>{const c=[...rows]; c[i]={...c[i],count:+e.target.value}; setRows(c);}}/>
-                      </label>
-                      <label>start (h)&nbsp;
-                        <input type="number" value={r.start}
-                          onChange={e=>{const c=[...rows]; c[i]={...c[i],start:+e.target.value}; setRows(c);}}/>
-                      </label>
-                      {(r.route ?? route) === "iv_infusion" && (
-                        <label>Tinf (h)&nbsp;
-                          <input type="number" step="0.1" value={r.Tinf}
-                            onChange={e=>{const c=[...rows]; c[i]={...c[i],Tinf:+e.target.value}; setRows(c);}}/>
-                        </label>
-                      )}
-                    </div>
-                  </details>
-                </td>
-                <td>
-                  <button onClick={()=>{const c=rows.slice(); c.splice(i,1); setRows(c);}}>Remove</button>
+                  <button
+                    onClick={()=>{const c=rows.slice(); c.splice(i,1); setRows(c);}}
+                    style={{ width: "100%", minWidth: 100 }}
+                  >
+                    Remove
+                  </button>
                 </td>
               </tr>
             ))}

@@ -426,3 +426,11 @@ button[title="Back to Home"]:hover{ color: var(--primary-800); text-decoration-t
   box-shadow: var(--shadow-1);
 }
 .help-badge:hover{ box-shadow: var(--shadow-2); }
+
+.preview-section { overflow: hidden; }
+.preview-section .preview-table { width:100%; table-layout:fixed; }
+.preview-section .preview-table th,
+.preview-section .preview-table td { white-space:nowrap; }
+.preview-section .preview-table input,
+.preview-section .preview-table select { max-width:100%; box-sizing:border-box; }
+.preview-section .table-wrap { overflow-x:auto; }

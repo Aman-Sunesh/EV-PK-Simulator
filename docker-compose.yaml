@@ -2,5 +2,5 @@ services:
   igem:
     build: .
     container_name: igem
-    networks:
-      - caddy
+    ports:
+      - "8000:8000"

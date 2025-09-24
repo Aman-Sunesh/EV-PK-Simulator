@@ -427,7 +427,70 @@ button[title="Back to Home"]:hover{ color: var(--primary-800); text-decoration-t
 }
 .help-badge:hover{ box-shadow: var(--shadow-2); }
 
-.preview-section { overflow: hidden; }
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Program builder table */
+.program-table{
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  min-width: 1280px;         
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-1);
+}
+.program-table col.type-col   { width: 160px; } 
+.program-table col.fields-col { width: auto;  } 
+.program-table col.act-col    { width: 120px; }  
+.program-table th,
+.program-table td{
+  padding: 12px 14px;
+  border-bottom: 1px solid #edf2f7;
+  background: #fff;
+  vertical-align: middle;
+}
+.program-table th{
+  background: linear-gradient(180deg, #f8fafc, #f3f6fb);
+  text-align: left;
+  font-weight: 700;
+  color: #15213a;
+  position: sticky; top: 0; z-index: 2;
+}
+
+.program-table .cell-actions{
+  width: 120px;              
+  white-space: nowrap;
+  position: sticky;
+  right: 0;                   
+  background: #fff;       
+  box-shadow: -8px 0 12px -8px rgba(0,0,0,.08);  
+  text-align: right;
+}
+
+/* Make the horizontal scrollbar easier to grab */
+.table-wrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom: 4px; }
+
+/* Compact action button */
+.btn-sm{ padding: 6px 10px; font-size: .85rem; box-shadow: none; }
+
+.program-table input,
+.program-table select{
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.btn-sm{
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  box-shadow: none;
+}
+
+.preview-section { overflow: visible; }
 
 /* -------------------------------------------------------
    Loading Spinner Animation
@@ -442,3 +505,6 @@ button[title="Back to Home"]:hover{ color: var(--primary-800); text-decoration-t
 .preview-section .preview-table input,
 .preview-section .preview-table select { max-width:100%; box-sizing:border-box; }
 .preview-section .table-wrap { overflow-x:auto; }
+
+.note { font-size: 0.9rem; color: #64748b; }
+.disabled-block { opacity: .6; pointer-events: none; }

@@ -65,10 +65,35 @@ export default function Upload() {
   const [program, setProgram] = useState([]);   // high-level steps
   const [weightKg, setWeightKg] = useState(70);
   const [useMgPerKg, setUseMgPerKg] = useState(false);
-  const [optTargetCmax, setOptTargetCmax] = useState("");
+
+  // Program helpers
+  const programActive = program.length > 0;
+  function updateProgramField(idx, key, val) {
+    setProgram(prev => prev.map((s,i) => (i===idx ? { ...s, [key]: val } : s)));
+  }
+  function removeProgramRow(idx){
+    setProgram(prev => prev.filter((_,i)=>i!==idx));
+  }
+  // Add a repeat (bolus) step with sensible defaults from current controls
+  function addRepeatBolusStep() {
+    const effDose = useMgPerKg ? repeatDose * weightKg : repeatDose; // mg
+    setProgram(p => [...p, {
+      type: "repeat",
+      pattern: "bolus",
+      start: Number(repeatStart) || 0,
+      tau: Number(repeatTau) || 8,
+      count: Number(repeatCount) || 3,
+      dose: Number(effDose) || 100
+    }]);
+  }
 
   // Simulation result
   const [sim, setSim] = useState(null); // {time, conc, summary, dosing}
+  // Simulate UI tabs
+  const [simTab, setSimTab] = useState("route"); // 'route' | 'dosing' | 'whatif'
+  // Dosing sub-mode: 'builder' (Plan Builder) or 'schedule' (Manual Schedule)
+  const [dosingMode, setDosingMode] = useState('builder');
+
 
   // Mechanistic two-compartment parameters
   const [k10, setK10] = useState(PRESETS[preset].twoμ.k10);
@@ -637,83 +662,6 @@ const onDrop = useCallback(async (files) => {
     }
   };
 
-  // Call backend /what_if (supports mg/kg, weight, simple optimizer)
-  const runWhatIf = async () => {
-    setLoading(true);
-    setLoadingMessage("Running what-if simulation...");
-    
-    try {
-      const modelKey =
-      selectedModel === "one" ? "1c" :
-      (selectedModel === "two" ? "2c" : "3c");
-
-    const params = {};
-    if (modelKey === "1c") {
-      params.Vd  = Number(Vd);
-      params.kel = Number(kel);
-    } 
-    
-    else if (modelKey === "2c") {
-      if (paramMode === "macro") {
-        params.A     = Number(A);
-        params.alpha = Number(alpha);
-        params.B     = Number(B);
-        params.beta  = Number(beta);
-      } else {
-        params.k10 = Number(k10);
-        params.k12 = Number(k12);
-        params.k21 = Number(k21);
-        params.V1  = Number(V1);
-      }
-    } else {
-      if (paramMode === "macro") {
-        params.A = Number(A3); params.alpha = Number(alpha3);
-        params.B = Number(B3); params.beta  = Number(beta3);
-        params.C = Number(C3); params.gamma = Number(gamma3);
-      } else {
-        params.k10 = Number(k103);
-        params.k12 = Number(k123);
-        params.k21 = Number(k213);
-        params.k13 = Number(k133);
-        params.k31 = Number(k313);
-        params.V1  = Number(V13);
-        params.V2  = Number(V23);
-        params.V3  = Number(V33);
-      }
-    }
-    params.F    = Number(F);
-    params.ka   = Number(ka);
-    params.Tinf = Number(Tinf);
-
-    const payload = {
-      model: modelKey,
-      route: rxRoute,
-      params,
-      weight_kg: Number(weightKg),
-      dose_spec: useMgPerKg
-        ? { dose_mg_per_kg: Number(repeatDose) }
-        : { dose_mg: Number(repeatDose) },
-      tau: Number(repeatTau),
-      count: Number(repeatCount),
-      start: Number(repeatStart),
-      Tinf: Number(Tinf),
-      t_end: Number(tEnd),
-      dt: Number(dt),
-      rate_merge_tol: RATE_MERGE_TOL,
-      ...(optTargetCmax && modelKey === "1c" && rxRoute === "iv_bolus"
-        ? { optimize: { target_Cmax_ss: Number(optTargetCmax) || 0 } }
-        : {})
-    };
-    
-      const res = await axios.post("/what_if", payload);
-      setSim(res.data);
-    } catch (err) {
-      showError("What-If error: " + (err.response?.data?.detail || err.message));
-    } finally {
-      setLoading(false);
-      setLoadingMessage("");
-    }
-  };
 
   // Run PD analysis - bacteria CFU dynamics
   const runPDBacteria = async () => {
@@ -1886,7 +1834,7 @@ const onDrop = useCallback(async (files) => {
                 checked={mode === "simulate"}
                 onChange={() => setMode("simulate")}
               />{" "}
-              Enter fixed parameters (simulate)
+              Simulate: Injection Route Explorers & Dosing Regimens
             </label>
           </div>
 
@@ -1919,7 +1867,7 @@ const onDrop = useCallback(async (files) => {
           <div className="note">
             {mode === "analyze"
               ? "Analyze: upload a dataset and fit parameters. Advanced seed guesses are optional starting values."
-              : "Simulate: no file needed — enter parameters and dosing to generate a synthetic profile."}
+              : "Simulate: pick a route (Route), define the regimen (Dosing), or explore sliders (What-If). Then click Simulate."}
           </div>
 
           {/* Analyze-only: Advanced seed guesses toggle */}
@@ -2260,152 +2208,42 @@ const onDrop = useCallback(async (files) => {
 
           {/* Simulation UI is only shown in Simulate mode */}
           {mode === "simulate" && (
-          <div className="preview-section">
-            <h3>
-              {selectedModel === "one" ? "Route Explorer (One-Compartment)"
-              : selectedModel === "two" ? "Route Explorer (Two-Compartment)"
-              : "Route Explorer (Three-Compartment)"}
-            </h3>
+            <div className="preview-section">
+              <h3>Simulate</h3>
 
-            {/* Program Builder */}
-            <div className="input-row">
-              <strong>Program builder</strong>&nbsp;
-              <button onClick={() => setProgram([...program, {type:"bolus", time:0, dose:100}])}>+ Bolus</button>
-              <button onClick={() => setProgram([...program, {type:"infusion", start:0, dose:1000, Tinf:1}])}>+ Infusion</button>
-              <button onClick={() => setProgram([...program, {type:"repeat", pattern:"bolus", start:0, tau:8, count:6, dose:100}])}>+ Repeat (bolus)</button>
-            </div>
-            {program.length > 0 && (
-              <table className="preview-table">
-                <thead>
-                  <tr><th>Type</th><th>Fields</th><th></th></tr>
-                </thead>
-                <tbody>
-                  {program.map((step, i) => (
-                    <tr key={i}>
-                      <td>{step.type}</td>
-                      <td>
-                        <input
-                          style={{width: '95%'}}
-                          value={JSON.stringify(step)}
-                          onChange={e=>{
-                            try { 
-                              const parsed = JSON.parse(e.target.value);
-                              const copy = program.slice(); copy[i] = parsed; setProgram(copy);
-                            } catch{}
-                          }}
-                        />
-                      </td>
-                      <td><button onClick={()=>{ const copy=program.slice(); copy.splice(i,1); setProgram(copy);}}>Remove</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            <div className="input-row">
-              <label>
-                Route:&nbsp;
-                <select value={rxRoute} onChange={e => setRxRoute(e.target.value)}>
-                  <option value="iv_bolus">IV bolus</option>
-                  <option value="iv_infusion">IV infusion (short-term)</option>
-                  <option value="oral">Oral (first-order)</option>
-                  <option value="sc">Subcutaneous (first-order)</option>
-                </select>
-              </label>
-              &nbsp;&nbsp;
-            </div>
-
-            {selectedModel === "one" ? (
-              <div className="input-row">
-                <label title="Apparent volume of distribution (L)">Vd (L):&nbsp;
-                  <input type="number" min="0.001" max="2000" step="0.001"
-                    value={Vd} onChange={e=>setVd(parseFloat(e.target.value))} style={{width:110}}/>
-                </label>
-                &nbsp;
-                <label title="Elimination rate constant (1/h)">kel (1/h):&nbsp;
-                  <input type="number" min="0.02" max="5.0" step="0.01"
-                    value={kel} onChange={e=>setKel(parseFloat(e.target.value))} style={{width:110}}/>
-                </label>
-                {rxRoute === "iv_infusion" && (
-                  <>
-                    &nbsp;
-                    <label title="Infusion duration per dose (hours)">Tinf (h):&nbsp;
-                      <input type="number" min="0.01" step="0.01"
-                        value={Tinf} onChange={e=>setTinf(parseFloat(e.target.value))} style={{width:90}}/>
-                    </label>
-                  </>
-                )}
-                {(rxRoute === "oral" || rxRoute === "sc") && (
-                  <>
-                    &nbsp;
-                    <label title="Bioavailability fraction (unitless)">F:&nbsp;
-                      <input type="number" min="0" max="1" step="0.01"
-                        value={F} onChange={e=>setF(parseFloat(e.target.value))} style={{width:90}}/>
-                    </label>
-                    &nbsp;
-                    <label title="Absorption rate constant (1/h)">ka (1/h):&nbsp;
-                      <input type="number" min="0.05" max="10" step="0.01"
-                        value={ka} onChange={e=>setKa(parseFloat(e.target.value))} style={{width:90}}/>
-                    </label>
-                  </>
-                )}
+              {/* Tab bar */}
+              <div className="tabbar" style={{display:'flex', gap:8, marginBottom:12}}>
+                <button className={simTab==='route'?'tab active':'tab'} onClick={()=>setSimTab('route')}>Route</button>
+                <button className={simTab==='dosing'?'tab active':'tab'} onClick={()=>setSimTab('dosing')}>Dosing</button>
+                <div style={{flex:1}} />
+                <button onClick={runSim} disabled={simErrors.length > 0}>Simulate</button>
               </div>
-            ) : selectedModel === "two" ? (
-              <>
-                {paramMode === "macro" ? (
+
+              {/* ROUTE TAB — pick route + PK params only */}
+              {simTab === 'route' && (
+                <>
                   <div className="input-row">
-                    <label title="Macro coefficient A (≈ 1/L for unit dose)">A (1/L):&nbsp;
-                      <input type="number" value={A} onChange={e=>setA(parseFloat(e.target.value))} style={{width:90}}/>
-                    </label>
-                    &nbsp;
-                    <label title="Macro rate α (1/h)">α (1/h):&nbsp;
-                      <input type="number" min="0.05" max="5" step="0.01"
-                        value={alpha} onChange={e=>setAlpha(parseFloat(e.target.value))} style={{width:90}}/>
-                    </label>
-                    &nbsp;
-                     <label title="Macro coefficient B (≈ 1/L for unit dose)">B (1/L):&nbsp;
-                      <input type="number" value={B} onChange={e=>setB(parseFloat(e.target.value))} style={{width:90}}/>
-                    </label>
-                    &nbsp;
-                    <label title="Macro rate β (1/h)">β (1/h):&nbsp;
-                      <input type="number" min="0.01" max="2" step="0.01"
-                        value={beta} onChange={e=>setBeta(parseFloat(e.target.value))} style={{width:90}}/>
+                    <label>
+                      Route:&nbsp;
+                      <select value={rxRoute} onChange={e => setRxRoute(e.target.value)}>
+                        <option value="iv_bolus">IV bolus</option>
+                        <option value="iv_infusion">IV infusion (short-term)</option>
+                        <option value="oral">Oral (first-order)</option>
+                        <option value="sc">Subcutaneous (first-order)</option>
+                      </select>
                     </label>
                   </div>
-                ) : (
-                  <div className="input-row">
-                    <label title="Elimination from central (1/h)">k₁₀ (1/h):&nbsp;
-                      <input type="number" min="0.02" max="5" step="0.01"
-                        value={k10} onChange={e=>setK10(parseFloat(e.target.value))} style={{ width: 90 }}/>
-                    </label>
-                    &nbsp;
-                    <label title="Distribution central→peripheral (1/h)">k₁₂ (1/h):&nbsp;
-                      <input type="number" min="0.02" max="5" step="0.01"
-                        value={k12} onChange={e=>setK12(parseFloat(e.target.value))} style={{ width: 90 }}/>
-                    </label>
-                    &nbsp;
-                    <label title="Distribution peripheral→central (1/h)">k₂₁ (1/h):&nbsp;
-                      <input type="number" min="0.02" max="5" step="0.01"
-                        value={k21} onChange={e=>setK21(parseFloat(e.target.value))} style={{ width: 90 }}/>
-                    </label>
-                    &nbsp;
-                     <label title="Central compartment volume (L)">V₁ (L):&nbsp;
-                      <input type="number" min="0.001" max="2000" step="0.001"
-                        value={V1} onChange={e=>setV1(parseFloat(e.target.value))} style={{ width: 90 }}/>
-                    </label>
-                  </div>
-                )}
-                <div className="input-row">
+
+                  {/* Route-specific extras only: */}
                   {rxRoute === "iv_infusion" && (
-                    <>
+                    <div className="input-row">
                       <label title="Infusion duration per dose (hours)">Tinf (h):&nbsp;
                         <input type="number" value={Tinf} onChange={e=>setTinf(parseFloat(e.target.value))} style={{width:90}}/>
                       </label>
-                      &nbsp;
-                    </>
+                    </div>
                   )}
                   {(rxRoute === "oral" || rxRoute === "sc") && (
-                    <>
+                    <div className="input-row">
                       <label title="Bioavailability fraction (unitless)">F:&nbsp;
                         <input type="number" min="0" max="1" step="0.01"
                           value={F} onChange={e=>setF(parseFloat(e.target.value))} style={{width:90}}/>
@@ -2415,262 +2253,279 @@ const onDrop = useCallback(async (files) => {
                         <input type="number" min="0.05" max="10" step="0.01"
                           value={ka} onChange={e=>setKa(parseFloat(e.target.value))} style={{width:90}}/>
                       </label>
-                    </>
+                    </div>
                   )}
-                </div>
-              </>
-            ): null}
-
-            {selectedModel === "three" && (
-              <div className="input-row">
-                {rxRoute === "iv_infusion" && (
-                  <>
-                    <label title="Infusion duration per dose (hours)">Tinf (h):&nbsp;
-                      <input
-                        type="number"
-                        value={Tinf}
-                        onChange={e => setTinf(parseFloat(e.target.value))}
-                        style={{ width: 90 }}
-                      />
-                    </label>
-                    &nbsp;
-                  </>
-                )}
-                {(rxRoute === "oral" || rxRoute === "sc") && (
-                  <>
-                    <label title="Bioavailability fraction (unitless)">F:&nbsp;
-                      <input
-                        type="number" min="0" max="1" step="0.01"
-                        value={F}
-                        onChange={e => setF(parseFloat(e.target.value))}
-                        style={{ width: 90 }}
-                      />
-                    </label>
-                    &nbsp;
-                    <label title="Absorption rate constant (1/h)">ka (1/h):&nbsp;
-                      <input
-                        type="number" min="0.05" max="10" step="0.01"
-                        value={ka}
-                        onChange={e => setKa(parseFloat(e.target.value))}
-                        style={{ width: 90 }}
-                      />
-                    </label>
-                  </>
-                )}
-              </div>
-            )}
-
-            <fieldset style={{border:'1px solid #ddd', padding:12, borderRadius:8, marginTop:12}}>
-              <legend>What-If Dosing</legend>
-              <label style={{display:'block', margin:'6px 0'}}>
-                Dose units:&nbsp;
-                <select
-                  value={useMgPerKg ? "mg/kg" : "mg"}
-                  onChange={e => setUseMgPerKg(e.target.value === "mg/kg")}
-                >
-                  <option value="mg">mg</option>
-                  <option value="mg/kg">mg/kg</option>
-                </select>
-              </label>
-
-              <label style={{display:'block', margin:'6px 0'}}>
-                {useMgPerKg ? "Dose (mg/kg)" : "Dose (mg)"}: {repeatDose}
-                <input
-                  type="range" min="1" max="2000" step="1"
-                  value={repeatDose}
-                  onChange={e => setRepeatDose(Number(e.target.value))}
-                />
-              </label>
-
-              <label style={{display:'block', margin:'6px 0'}}>
-                τ (interval, h): {repeatTau}
-                <input
-                  type="range" min="1" max="48" step="0.5"
-                  value={repeatTau}
-                  onChange={e => setRepeatTau(Number(e.target.value))}
-                />
-              </label>
-
-              {rxRoute === "iv_infusion" && (
-                <label style={{display:'block', margin:'6px 0'}}>
-                  Infusion time Tinf (h): {Tinf}
-                  <input
-                    type="range" min="0.1" max="24" step="0.1"
-                    value={Tinf}
-                    onChange={e => setTinf(Number(e.target.value))}
-                  />
-                </label>
-              )}
-
-              <label style={{display:'block', margin:'6px 0'}}>
-                Body weight (kg): {weightKg}
-                <input
-                  type="range" min="1" max="120" step="1"
-                  value={weightKg}
-                  onChange={e => setWeightKg(Number(e.target.value))}
-                />
-              </label>
-
-              <label style={{display:'block', margin:'6px 0'}}>
-                Target Cmax_ss (1c IV bolus):&nbsp;
-                <input
-                  type="number" min="0" step="0.01" placeholder="leave blank to disable"
-                  value={optTargetCmax}
-                  onChange={e => setOptTargetCmax(e.target.value)}
-                  style={{ width: 160 }}
-                />
-              </label>
-              <div style={{marginTop:8}}>
-                <button type="button" onClick={makeRepeatSchedule}>Apply to Schedule</button>
-                <button type="button" style={{marginLeft:8}} onClick={runSim}>Simulate</button>
-                <button type="button" style={{marginLeft:8}} onClick={runWhatIf}>Simulate (What-If)</button>
-              </div>
-            </fieldset>
-
-            {/* Repeat rule */}
-            <div className="input-row">
-              <strong>Repeat rule</strong>&nbsp;
-              <label>Start (h):&nbsp;
-                <input type="number" value={repeatStart} onChange={e=>setRepeatStart(parseFloat(e.target.value))} style={{width:90}}/>
-              </label>
-              &nbsp;
-              <label>Every τ (h):&nbsp;
-                <input type="number" value={repeatTau} onChange={e=>setRepeatTau(parseFloat(e.target.value))} style={{width:90}}/>
-              </label>
-              &nbsp;
-              <label># doses:&nbsp;
-                <input type="number" value={repeatCount} onChange={e=>setRepeatCount(parseInt(e.target.value||"0"))} style={{width:90}}/>
-              </label>
-              &nbsp;
-              <label>Dose (mg):&nbsp;
-                <input type="number" value={repeatDose} onChange={e=>setRepeatDose(parseFloat(e.target.value))} style={{width:110}}/>
-              </label>
-              {rxRoute === "iv_infusion" && (
-                <>
-                  &nbsp;
-                  <label>Tinf (h):&nbsp;
-                    <input type="number" value={Tinf} onChange={e=>setTinf(parseFloat(e.target.value))} style={{width:90}}/>
-                  </label>
                 </>
               )}
-            </div>
 
-            {/* Manual schedule table */}
-            <div className="input-row">
-              <strong>Custom schedule</strong>
-            </div>
-            {schedule.length > 0 && (
-              <table className="preview-table">
-                <thead>
-                  <tr>
-                    <th>Time (h)</th>
-                    <th>Dose (mg)</th>
-                    {rxRoute === "iv_infusion" && <th>Tinf (h)</th>}
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {schedule.map((row, i) => (
-                    <tr key={i}>
-                      <td><input type="number" value={row.time}
-                          onChange={e=>updateDoseRow(i, "time", parseFloat(e.target.value))}
-                          style={{width:100}}/></td>
-                      <td><input type="number" value={row.dose}
-                          onChange={e=>updateDoseRow(i, "dose", parseFloat(e.target.value))}
-                          style={{width:100}}/></td>
-                      {rxRoute === "iv_infusion" && (
-                        <td><input type="number" value={row.Tinf ?? Tinf}
-                            onChange={e=>updateDoseRow(i, "Tinf", parseFloat(e.target.value))}
-                            style={{width:100}}/></td>
-                      )}
-                      <td><button onClick={()=>removeDoseRow(i)}>Remove</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+              {/* DOSING TAB — program builder + repeat + schedule */}
+              {simTab === 'dosing' && (
+                <>
+          {/* Dosing sub-mode switch */}
+          <div className="input-row" style={{display:'flex', gap:8}}>
+            <strong style={{marginRight:8}}>Dosing mode:</strong>
+            <button
+              className={dosingMode==='builder'?'tab active':'tab'}
+              onClick={()=>setDosingMode('builder')}
+              type="button"
+            >
+              Plan Builder
+            </button>
+            <button
+              className={dosingMode==='schedule'?'tab active':'tab'}
+              onClick={()=>setDosingMode('schedule')}
+              type="button"
+            >
+              Manual Schedule
+            </button>
+          </div>
 
-            {/* Time grid & simulate */}
-            <div className="input-row">
-                <label title="Simulation end time (hours)">t_end (h):&nbsp;
-                <input type="number" min="1" max="168" step="1"
-                  value={tEnd} onChange={e=>setTEnd(parseFloat(e.target.value))} style={{width:90}}/>
-              </label>
-              &nbsp;
-              <label>dt (h):&nbsp;
-                <input type="number" min="0.001" step="0.001"
-                  value={dt} onChange={e=>setDt(parseFloat(e.target.value))} style={{width:90}}/>
-              </label>
-              &nbsp;
-
-              <label>
-                <input type="checkbox" checked={logY} onChange={e=>setLogY(e.target.checked)} />
-                &nbsp;Semilog Y
-              </label>
-            </div>
-            {simErrors.length > 0 && (
-              <div className="error-list">
-                {simErrors.slice(0,5).map((e,i) => <div key={i}>• {e}</div>)}
-                {simErrors.length > 5 && <div>• ...and {simErrors.length - 5} more</div>}
+          {/* ==== Plan Builder mode ==== */}
+          {dosingMode === 'builder' && (
+            <>
+              <div className="input-row">
+                <strong>Plan Builder</strong>&nbsp;
+                <button onClick={() => setProgram([...program, {type:"bolus", time:0, dose:100}])}>+ Add Bolus</button>
+                <button onClick={() => setProgram([...program, {type:"infusion", start:0, dose:1000, Tinf:1}])}>+ Add Infusion</button>
+                <button onClick={addRepeatBolusStep}>+ Repeat Bolus</button>
               </div>
+                  {program.length > 0 && (
+                    <div className="table-wrap">
+                      <table className="program-table">
+                        <colgroup>
+                          <col className="type-col" />
+                          <col className="fields-col" />
+                          <col className="act-col" />
+                        </colgroup>
+                        <thead>
+                          <tr>
+                            <th>Type</th>
+                            <th>Fields</th>
+                            <th className="cell-actions">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {program.map((s, i) => (
+                            <tr key={i}>
+                              <td>{s.type}</td>
+                              <td>
+                                {s.type === "repeat" && (
+                                  <div style={{display:"grid",gridTemplateColumns:"repeat(5, 140px)",gap:10}}>
+                                    <label>Pattern
+                                      <select
+                                        value={s.pattern || "bolus"}
+                                        onChange={e=>updateProgramField(i,"pattern",e.target.value)}>
+                                        <option value="bolus">bolus</option>
+                                        <option value="infusion">infusion</option>
+                                      </select>
+                                    </label>
+                                    <label>Start (h)
+                                      <input type="number" value={s.start ?? 0}
+                                            onChange={e=>updateProgramField(i,"start",+e.target.value)} />
+                                    </label>
+                                    <label>τ (h)
+                                      <input type="number" step="0.5" value={s.tau ?? 8}
+                                            onChange={e=>updateProgramField(i,"tau",+e.target.value)} />
+                                    </label>
+                                    <label># doses
+                                      <input type="number" value={s.count ?? 3}
+                                            onChange={e=>updateProgramField(i,"count",+e.target.value)} />
+                                    </label>
+                                    <label>Dose (mg)
+                                      <input type="number" value={s.dose ?? 100}
+                                            onChange={e=>updateProgramField(i,"dose",+e.target.value)} />
+                                    </label>
+                                    {s.pattern === "infusion" && (
+                                      <label>Tinf (h)
+                                        <input type="number" step="0.1" value={s.Tinf ?? Tinf}
+                                              onChange={e=>updateProgramField(i,"Tinf",+e.target.value)} />
+                                      </label>
+                                    )}
+                                  </div>
+                                )}
+                                {s.type === "bolus" && (
+                                  <div style={{display:"grid",gridTemplateColumns:"repeat(2, 140px)",gap:10}}>
+                                    <label>Time (h)
+                                      <input type="number" value={s.time ?? 0}
+                                            onChange={e=>updateProgramField(i,"time",+e.target.value)} />
+                                    </label>
+                                    <label>Dose (mg)
+                                      <input type="number" value={s.dose ?? 100}
+                                            onChange={e=>updateProgramField(i,"dose",+e.target.value)} />
+                                    </label>
+                                  </div>
+                                )}
+                                {s.type === "infusion" && (
+                                  <div style={{display:"grid",gridTemplateColumns:"repeat(3, 140px)",gap:10}}>
+                                    <label>Start (h)
+                                      <input type="number" value={s.start ?? 0}
+                                            onChange={e=>updateProgramField(i,"start",+e.target.value)} />
+                                    </label>
+                                    <label>Dose (mg)
+                                      <input type="number" value={s.dose ?? 1000}
+                                            onChange={e=>updateProgramField(i,"dose",+e.target.value)} />
+                                    </label>
+                                    <label>Tinf (h)
+                                      <input type="number" step="0.1" value={s.Tinf ?? 1}
+                                            onChange={e=>updateProgramField(i,"Tinf",+e.target.value)} />
+                                    </label>
+                                  </div>
+                                )}
+                              </td>
+                              <td className="cell-actions">
+                                <button
+                                  className="btn-secondary btn-sm"
+                                  onClick={()=>removeProgramRow(i)}
+                                  type="button"
+                                  aria-label={`Remove row ${i+1}`}
+                                  title="Remove this step"
+                                >
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+              </>
             )}
 
-            {/* Unified actions toolbar */}
-            <div className="actions-row">
-              <button type="button" className="btn-ghost" onClick={addDoseRow}>
-                Add dose
-              </button>
-              <button type="button" className="btn-secondary" onClick={makeRepeatSchedule}>
-                Generate
-              </button>
-              <button onClick={runSim} disabled={simErrors.length > 0}>
-                Simulate
-              </button>
-            </div>
-
-            {/* Results */}
-            {sim && (
-              <div className="results">
-                <h4>Simulation</h4>
-                <div className="kpis">
-                  <div className="kpi">Cmax: <strong>{fmt(sim.summary?.Cmax, 3)}</strong></div>
-                  <div className="kpi">Tmax (h): <strong>{fmt(sim.summary?.Tmax, 3)}</strong></div>
-                  <div className="kpi">AUC (0–t_end): <strong>{fmt(sim.summary?.AUC, 3)}</strong></div>
-                  {"Cmax_ss" in (sim.summary || {}) && (
-                    <div className="kpi">Cmax_ss: <strong>{fmt(sim.summary?.Cmax_ss, 3)}</strong></div>
-                  )}
-                  {"Cmin_ss" in (sim.summary || {}) && (
-                    <div className="kpi">Cmin_ss: <strong>{fmt(sim.summary?.Cmin_ss, 3)}</strong></div>
-                  )}
-                  {"Cavg_ss" in (sim.summary || {}) && (
-                    <div className="kpi">Cavg_ss: <strong>{fmt(sim.summary?.Cavg_ss, 3)}</strong></div>
+            {/* ==== Manual Schedule mode ==== */}
+            {dosingMode === 'schedule' && (
+              <>
+                <div className="input-row">
+                  <strong>Repeat Rule</strong>&nbsp;
+                  <label>Start (h)
+                    <input type="number" value={repeatStart}
+                          onChange={e=>setRepeatStart(+e.target.value)} />
+                  </label>
+                  <label>Every τ (h)
+                    <input type="number" value={repeatTau} step="0.5"
+                          onChange={e=>setRepeatTau(+e.target.value)} />
+                  </label>
+                  <label># doses
+                    <input type="number" value={repeatCount}
+                          onChange={e=>setRepeatCount(+e.target.value)} />
+                  </label>
+                  <label>Dose (mg)
+                    <input type="number" value={repeatDose}
+                          onChange={e=>setRepeatDose(+e.target.value)} />
+                  </label>
+                  {rxRoute === "iv_infusion" && (
+                    <label>Tinf (h)
+                      <input type="number" value={Tinf} step="0.1"
+                            onChange={e=>setTinf(+e.target.value)} />
+                    </label>
                   )}
                 </div>
-                <Plot
-                  time={sim.time}
-                  conc={sim.conc}
-                  dosing={sim.dosing}
-                  title={
-                    selectedModel === "one"
-                      ? `Expected shapes by route - 1 compartment, kel = ${fmt(kel,2)} 1/h, Vd = ${fmt(Vd,1)} L`
-                      : selectedModel === "two"
-                      ? (
-                          paramMode === "macro"
-                            ? `Expected shapes by route - 2 compartments, α = ${fmt(alpha,2)} 1/h, β = ${fmt(beta,2)} 1/h`
-                            : `Expected shapes by route - 2 compartments, k₁₀ = ${fmt(k10,2)} 1/h, k₁₂ = ${fmt(k12,2)} 1/h, k₂₁ = ${fmt(k21,2)} 1/h, V₁ = ${fmt(V1,1)} L`
-                        )
-                      : (
-                          paramMode === "macro"
-                            ? `Expected shapes by route - 3 compartments, α = ${fmt(alpha3,2)} 1/h, β = ${fmt(beta3,2)} 1/h, γ = ${fmt(gamma3,2)} 1/h`
-                            : `Expected shapes by route - 3 compartments, k₁₀ = ${fmt(k103,2)} 1/h, k₁₂ = ${fmt(k123,2)} 1/h, k₂₁ = ${fmt(k213,2)} 1/h, k₁₃ = ${fmt(k133,2)} 1/h, k₃₁ = ${fmt(k313,2)} 1/h, V₁ = ${fmt(V13,1)} L`
-                        )
-                  }
-                  xUnit="h"
-                  yUnit="a.u."
-                />
+
+                <div className="input-row"><strong>Manual Schedule</strong></div>
+                 {schedule.length > 0 && (
+                    <table className="preview-table">
+                      <thead>
+                        <tr>
+                          <th>Time (h)</th>
+                          <th>Dose (mg)</th>
+                          {rxRoute==='iv_infusion' && <th>Tinf (h)</th>}
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {schedule.map((row,i)=>(
+                          <tr key={i}>
+                            <td><input type="number" value={row.time} onChange={e=>updateDoseRow(i,"time",parseFloat(e.target.value))} style={{width:100}}/></td>
+                            <td><input type="number" value={row.dose} onChange={e=>updateDoseRow(i,"dose",parseFloat(e.target.value))} style={{width:100}}/></td>
+                            {rxRoute==='iv_infusion' && (
+                              <td><input type="number" value={row.Tinf ?? Tinf} onChange={e=>updateDoseRow(i,"Tinf",parseFloat(e.target.value))} style={{width:100}}/></td>
+                            )}
+                            <td className="cell-actions">
+                              <button className="btn-secondary btn-sm" onClick={()=>removeDoseRow(i)} type="button">
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  <div className="actions-row">
+                    <button type="button" className="btn-ghost" onClick={addDoseRow}>Add Dose Row</button>
+                    <button onClick={runSim} disabled={simErrors.length > 0}>Simulate</button>
+                  </div>
+                </>
+              )}
+                </>
+              )}
+
+              {/* Shared: time grid / semilog / errors */}
+              <div className="input-row" style={{marginTop:12}}>
+                <label title="Simulation end time (hours)">t_end (h):&nbsp;
+                  <input type="number" min="1" max="168" step="1"
+                    value={tEnd} onChange={e=>setTEnd(parseFloat(e.target.value))} style={{width:90}}/>
+                </label>
+                &nbsp;
+                <label>dt (h):&nbsp;
+                  <input type="number" min="0.001" step="0.001"
+                    value={dt} onChange={e=>setDt(parseFloat(e.target.value))} style={{width:90}}/>
+                </label>
+                &nbsp;
+                <label>
+                  <input type="checkbox" checked={logY} onChange={e=>setLogY(e.target.checked)} />
+                  &nbsp;Semilog Y
+                </label>
               </div>
-            )}
-          </div>
+              {simErrors.length > 0 && (
+                <div className="error-list">
+                  {simErrors.slice(0,5).map((e,i) => <div key={i}>• {e}</div>)}
+                  {simErrors.length > 5 && <div>• ...and {simErrors.length - 5} more</div>}
+                </div>
+              )}
+
+              {/* Results */}
+              {sim && (
+                <div className="results">
+                  <h4>Simulation</h4>
+                  <div className="kpis">
+                    <div className="kpi">Cmax: <strong>{fmt(sim.summary?.Cmax, 3)}</strong></div>
+                    <div className="kpi">Tmax (h): <strong>{fmt(sim.summary?.Tmax, 3)}</strong></div>
+                    <div className="kpi">AUC (0–t_end): <strong>{fmt(sim.summary?.AUC, 3)}</strong></div>
+                    {"Cmax_ss" in (sim.summary || {}) && (
+                      <div className="kpi">Cmax_ss: <strong>{fmt(sim.summary?.Cmax_ss, 3)}</strong></div>
+                    )}
+                    {"Cmin_ss" in (sim.summary || {}) && (
+                      <div className="kpi">Cmin_ss: <strong>{fmt(sim.summary?.Cmin_ss, 3)}</strong></div>
+                    )}
+                    {"Cavg_ss" in (sim.summary || {}) && (
+                      <div className="kpi">Cavg_ss: <strong>{fmt(sim.summary?.Cavg_ss, 3)}</strong></div>
+                    )}
+                  </div>
+                  <Plot
+                    time={sim.time}
+                    conc={sim.conc}
+                    dosing={sim.dosing}
+                    title={
+                      selectedModel === "one"
+                        ? `Expected shapes by route - 1 compartment, kel = ${fmt(kel,2)} 1/h, Vd = ${fmt(Vd,1)} L`
+                        : selectedModel === "two"
+                        ? (
+                            paramMode === "macro"
+                              ? `Expected shapes by route - 2 compartments, α = ${fmt(alpha,2)} 1/h, β = ${fmt(beta,2)} 1/h`
+                              : `Expected shapes by route - 2 compartments, k₁₀ = ${fmt(k10,2)} 1/h, k₁₂ = ${fmt(k12,2)} 1/h, k₂₁ = ${fmt(k21,2)} 1/h, V₁ = ${fmt(V1,1)} L`
+                          )
+                        : (
+                            paramMode === "macro"
+                              ? `Expected shapes by route - 3 compartments, α = ${fmt(alpha3,2)} 1/h, β = ${fmt(beta3,2)} 1/h, γ = ${fmt(gamma3,2)} 1/h`
+                              : `Expected shapes by route - 3 compartments, k₁₀ = ${fmt(k103,2)} 1/h, k₁₂ = ${fmt(k123,2)} 1/h, k₂₁ = ${fmt(k213,2)} 1/h, k₁₃ = ${fmt(k133,2)} 1/h, k₃₁ = ${fmt(k313,2)} 1/h, V₁ = ${fmt(V13,1)} L`
+                          )
+                    }
+                    xUnit="h"
+                    yUnit="a.u."
+                  />
+                </div>
+              )}
+            </div>
           )}
 
           {/* Jump to PD Button */}

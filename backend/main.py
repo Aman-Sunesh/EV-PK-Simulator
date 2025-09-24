@@ -15,7 +15,7 @@
 #      - /fit/three_compartment (AICc[linear|log], rate separation/tail checks; chained 3→2→1)
 #  • Reporting:
 #      - /report: multi-page PDF per subject (metadata, data summary, fit tables,
-#        GOF, selection diagnostics, residuals/VPC, linear/semilog plots, dosing timeline)
+#        GOF, selection diagnostics, residuals/VPC, linear/semilog plots)
 #  • Simulation:
 #      - /simulate_pk (+ batch), /what_if (+ batch), /virtual_trial
 #      - High-level dosing “program” expansion → low-level dosing events
@@ -1164,9 +1164,6 @@ async def create_report(payload: dict = Body(...)):
         elems.append(Spacer(1, 12))
         elems.append(Paragraph("Semilog Fit", styles["Heading2"]))
         elems.append(Image(buf_log, width=400, height=200))
-        elems.append(Spacer(1, 160))
-        elems.append(Paragraph("Dosing Timeline", styles["Heading2"]))
-        elems.append(Image(buf_dose, width=400, height=120))
 
         # page break between groups, not after the last one
         if idx < len(groups) - 1:

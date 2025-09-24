@@ -130,6 +130,19 @@ def _json_safe(obj):
         return int(obj)
     return obj
 
+def _format_cfu_value(value):
+    """Format CFU values as regular numbers if < 10^10, otherwise scientific notation."""
+    try:
+        num = float(value)
+        if num >= 1e10:  # 10^10
+            return f"{num:.2e}"
+        elif num >= 1000:
+            return f"{num:,.0f}"  # Add thousand separators for readability
+        else:
+            return f"{num:.1f}"
+    except (ValueError, TypeError):
+        return str(value)
+
 # allow cross-origin in development
 app.add_middleware(
     CORSMiddleware,
@@ -1227,9 +1240,9 @@ async def create_pd_report(payload: dict = Body(...)):
             log_kill = np.log10(CFU0) - np.log10(final_effect) if final_effect > 0 else float('inf')
             
             subject_stats = {
-                "Final CFU": f"{final_effect:.2e}",
+                "Final CFU": _format_cfu_value(final_effect),
                 "Log Kill": f"{log_kill:.2f}",
-                "Min CFU": f"{min_effect:.2e}"
+                "Min CFU": _format_cfu_value(min_effect)
             }
         else:  # pmm2
             Emax = float(pd_params.get("Emax", 100.0))
@@ -1369,6 +1382,34 @@ async def create_pd_report(payload: dict = Body(...)):
                 elems.append(stats_table)
                 elems.append(Spacer(1, 10))
                 
+                # Add detailed time-effect table for this subject
+                effect_label = "CFU" if pd_type == "bacteria" else "Activity (%)"
+                table_rows = [["Time (h)", "Concentration", effect_label]]
+                
+                for t_val, c_val, e_val in zip(result["time"], result["concentration"], result["effect"]):
+                    if pd_type == "bacteria":
+                        effect_str = _format_cfu_value(e_val)  # Use custom formatting for CFU
+                    else:
+                        effect_str = f"{e_val:.2f}"  # Regular decimal for activity percentage
+                    
+                    table_rows.append([
+                        f"{t_val:.2f}",
+                        f"{c_val:.3f}", 
+                        effect_str
+                    ])
+                
+                effect_table = Table(table_rows, hAlign="LEFT", colWidths=[70, 90, 100])
+                effect_table.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                    ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                    ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                    ("FONTSIZE", (0,0), (-1,-1), 9),
+                ]))
+                
+                elems.append(Paragraph("Time Course Data", styles["Heading4"]))
+                elems.append(effect_table)
+                elems.append(Spacer(1, 10))
+                
                 # Individual plot
                 try:
                     fig, ax = plt.subplots(figsize=(6, 4))
@@ -1418,6 +1459,34 @@ async def create_pd_report(payload: dict = Body(...)):
                     ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
                 ]))
                 elems.append(stats_table)
+                elems.append(Spacer(1, 10))
+                
+                # Add detailed time-effect table for this subject (fallback section)
+                effect_label = "CFU" if pd_type == "bacteria" else "Activity (%)"
+                table_rows = [["Time (h)", "Concentration", effect_label]]
+                
+                for t_val, c_val, e_val in zip(result["time"], result["concentration"], result["effect"]):
+                    if pd_type == "bacteria":
+                        effect_str = f"{e_val:.2e}"  # Scientific notation for CFU
+                    else:
+                        effect_str = f"{e_val:.2f}"  # Regular decimal for activity percentage
+                    
+                    table_rows.append([
+                        f"{t_val:.2f}",
+                        f"{c_val:.3f}", 
+                        effect_str
+                    ])
+                
+                effect_table = Table(table_rows, hAlign="LEFT", colWidths=[70, 90, 100])
+                effect_table.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                    ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                    ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                    ("FONTSIZE", (0,0), (-1,-1), 9),
+                ]))
+                
+                elems.append(Paragraph("Time Course Data", styles["Heading4"]))
+                elems.append(effect_table)
                 elems.append(Spacer(1, 15))
     
     # Build PDF

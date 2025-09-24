@@ -41,6 +41,7 @@ export default function Upload() {
   const [loadingMessage, setLoadingMessage] = useState(""); // Loading message
   const [showErrorPopup, setShowErrorPopup] = useState(false); // Error popup visibility
   const [errorMessage, setErrorMessage] = useState(""); // Error message
+  const [dataSource, setDataSource] = useState(""); // "upload" or "example" - tracks which data source is active
 
   // Route Explorer (one-compartment) state
   const [rxRoute, setRxRoute] = useState("iv_bolus");      // iv_bolus | iv_infusion | oral | sc
@@ -201,6 +202,8 @@ const onDrop = useCallback(async (files) => {
     setRawData(res.data.data);          // store full dataset
     setData(res.data.data.slice(0,5));  // keep first 5 for preview
     setWarnings(res.data.warnings);
+    setDataSource("upload"); // Mark upload as active data source
+    setSelectedStudy(""); // Clear any selected example study
   } catch (err) {
     console.error("Upload error detail:", err);
     showError("Upload failed: " + (err.response?.data?.detail || err.message));
@@ -245,6 +248,7 @@ const onDrop = useCallback(async (files) => {
       }
 
       setWarnings([]);
+      setDataSource("example"); // Mark example as active data source
     } catch (err) {
       showError("Failed to load study: " + id);
     } finally {
@@ -910,6 +914,7 @@ const onDrop = useCallback(async (files) => {
     setMode("analyze");
     setPdMode(false);
     setPdResults(null);
+    setDataSource(""); // Reset data source
   };
 
   // Jump to PD section: smooth scroll to PD analysis section
@@ -1427,7 +1432,7 @@ const onDrop = useCallback(async (files) => {
             Three-Compartment Model
           </button>
           <button onClick={() => setSelectedModel("pd-only")}>
-            PD Analysis from data
+            PD Analysis from Data
           </button>
           <button
             onClick={() => setShowComparePage(true)}
@@ -1444,7 +1449,7 @@ const onDrop = useCallback(async (files) => {
         {selectedModel === "one" ? "One-Compartment Model" :
          selectedModel === "two" ? "Two-Compartment Model" :
          selectedModel === "three" ? "Three-Compartment Model" :
-         "PD Analysis from data"}
+         "PD Analysis from Data"}
       </h2>
 
       {/* PD-Only Analysis Section */}
@@ -1456,33 +1461,99 @@ const onDrop = useCallback(async (files) => {
             The raw uploaded data will be used as concentration inputs for PD modeling.
           </div>
 
-          {/* File Upload */}
-          <div {...getRootProps()} className="dropzone">
-            <input {...getInputProps()} />
-            <p>
-              📁 <strong>Drag & drop</strong> a CSV/Excel file here, or <strong>click to browse</strong>
-            </p>
-            <p className="dropzone-hint">
-              Expected format: columns for Time, Concentration, and optionally Subject
-            </p>
-          </div>
+          {/* Data Input Section */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+              <h4 style={{ margin: 0, color: '#374151' }}>Data Input (Choose One)</h4>
+              {dataSource && (
+                <button
+                  onClick={() => {
+                    setDataSource("");
+                    setRawData([]);
+                    setData([]);
+                    setSelectedStudy("");
+                    setWarnings([]);
+                  }}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '12px',
+                    backgroundColor: '#F3F4F6',
+                    border: '1px solid #D1D5DB',
+                    borderRadius: '4px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Clear & Switch
+                </button>
+              )}
+            </div>
+            
+            {/* Example Study Selector */}
+            <div style={{ 
+              opacity: dataSource === "upload" ? 0.5 : 1,
+              pointerEvents: dataSource === "upload" ? "none" : "auto"
+            }}>
+              <h5 style={{ marginBottom: 8, fontSize: '14px', fontWeight: 'bold', color: dataSource === "example" ? '#059669' : '#6B7280' }}>
+                Option 1: Load Example Study {dataSource === "example" && "✓"}
+              </h5>
+              <div className="input-row">
+                <label>
+                  Load Example:&nbsp;
+                  <select
+                    value={selectedStudy}
+                    onChange={(e) => loadStudy(e.target.value)}
+                  >
+                    <option value="">— select study —</option>
+                    {studies.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
 
-          {/* Example Study Selector */}
-          <div className="input-row">
-            <label>
-              Load Example:&nbsp;
-              <select
-                value={selectedStudy}
-                onChange={(e) => loadStudy(e.target.value)}
-              >
-                <option value="">— select study —</option>
-                {studies.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* OR Separator */}
+            <div style={{ 
+              textAlign: 'center', 
+              margin: '15px 0',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              color: '#9CA3AF',
+              position: 'relative'
+            }}>
+              <span style={{ backgroundColor: 'white', padding: '0 10px' }}>OR</span>
+              <div style={{
+                position: 'absolute',
+                top: '50%',
+                left: 0,
+                right: 0,
+                height: '1px',
+                backgroundColor: '#E5E7EB',
+                zIndex: -1
+              }}></div>
+            </div>
+
+            {/* File Upload */}
+            <div style={{ 
+              marginBottom: 15,
+              opacity: dataSource === "example" ? 0.5 : 1,
+              pointerEvents: dataSource === "example" ? "none" : "auto"
+            }}>
+              <h5 style={{ marginBottom: 8, fontSize: '14px', fontWeight: 'bold', color: dataSource === "upload" ? '#059669' : '#6B7280' }}>
+                Option 2: Upload File {dataSource === "upload" && "✓"}
+              </h5>
+              <div {...getRootProps()} className="dropzone">
+                <input {...getInputProps()} />
+                <p>
+                  📁 <strong>Drag & drop</strong> a CSV/Excel file here, or <strong>click to browse</strong>
+                </p>
+                <p className="dropzone-hint">
+                  Expected format: columns for Time, Concentration, and optionally Subject
+                </p>
+              </div>
+            </div>
           </div>
 
           {/* Display uploaded data */}
@@ -1763,23 +1834,99 @@ const onDrop = useCallback(async (files) => {
       {/* Regular PK Analysis Sections - only show for non-PD-only models */}
       {selectedModel !== "pd-only" && (
         <>
-          {/* Example Study Selector */}
-          <div className="input-row">
-            <label>
-              Load Example:&nbsp;
-              <select
-                value={selectedStudy}
-                onChange={(e) => loadStudy(e.target.value)}
-              >
-                <option value="">— select study —</option>
-                {studies.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          {/* Data Input Section - only show in analyze mode */}
+          {mode === "analyze" && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                <h4 style={{ margin: 0, color: '#374151' }}>Data Input (Choose One)</h4>
+                {dataSource && (
+                  <button
+                    onClick={() => {
+                      setDataSource("");
+                      setRawData([]);
+                      setData([]);
+                      setSelectedStudy("");
+                      setWarnings([]);
+                    }}
+                    style={{
+                      padding: '4px 8px',
+                      fontSize: '12px',
+                      backgroundColor: '#F3F4F6',
+                      border: '1px solid #D1D5DB',
+                      borderRadius: '4px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Clear & Switch
+                  </button>
+                )}
+              </div>
+              
+              {/* Example Study Selector */}
+              <div style={{ 
+                marginBottom: 15,
+                opacity: dataSource === "upload" ? 0.5 : 1,
+                pointerEvents: dataSource === "upload" ? "none" : "auto"
+              }}>
+                <h5 style={{ marginBottom: 8, fontSize: '14px', fontWeight: 'bold', color: dataSource === "example" ? '#059669' : '#6B7280' }}>
+                  Option 1: Load Example Study {dataSource === "example" && "✓"}
+                </h5>
+                <div className="input-row">
+                  <label>
+                    Load Example:&nbsp;
+                    <select
+                      value={selectedStudy}
+                      onChange={(e) => loadStudy(e.target.value)}
+                    >
+                      <option value="">— select study —</option>
+                      {studies.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              {/* OR Separator */}
+              <div style={{ 
+                textAlign: 'center', 
+                margin: '15px 0',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                color: '#9CA3AF',
+                position: 'relative'
+              }}>
+                <span style={{ backgroundColor: 'white', padding: '0 10px' }}>OR</span>
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: 0,
+                  right: 0,
+                  height: '1px',
+                  backgroundColor: '#E5E7EB',
+                  zIndex: -1
+                }}></div>
+              </div>
+
+              {/* File Upload */}
+              <div style={{ 
+                opacity: dataSource === "example" ? 0.5 : 1,
+                pointerEvents: dataSource === "example" ? "none" : "auto"
+              }}>
+                <h5 style={{ marginBottom: 8, fontSize: '14px', fontWeight: 'bold', color: dataSource === "upload" ? '#059669' : '#6B7280' }}>
+                  Option 2: Upload File {dataSource === "upload" && "✓"}
+                </h5>
+                <div {...getRootProps()} className="dropzone">
+                  <input {...getInputProps()} />
+                  <p>
+                    📁 <strong>Drag & drop</strong> a CSV/Excel file here, or <strong>click to browse</strong>
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Species Input */}
           <div className="input-row">
@@ -2126,16 +2273,6 @@ const onDrop = useCallback(async (files) => {
                 </>
               )}
             </>
-          )}
-
-          {/* File Dropzone */}
-          {mode === "analyze" && (
-            <div {...getRootProps()} className="dropzone">
-              <input {...getInputProps()} />
-              <p>
-              📁 <strong>Drag & drop</strong> a CSV/Excel file here, or <strong>click to browse</strong>
-              </p>
-            </div>
           )}
 
           {mode === "analyze" && (warnings.length > 0 || mergeNote) && (

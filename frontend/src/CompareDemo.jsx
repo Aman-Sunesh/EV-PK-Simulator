@@ -13,6 +13,8 @@ export default function CompareDemo() {
   const [route, setRoute] = useState("iv_bolus");
   const [Vd, setVd] = useState(40);
   const [kel, setKel] = useState(0.2);
+  const [F, setF] = useState(1.0);
+  const [ka, setKa] = useState(1.0);
   const [tau, setTau] = useState(8);
   const [count, setCount] = useState(6);
   const [start, setStart] = useState(0);
@@ -23,13 +25,44 @@ export default function CompareDemo() {
   // ----- Per-row dosing builder -----
   const [rows, setRows] = useState([
     { label: "100 mg q8h", units: "mg", dose: 100, weightKg: 70, optimize: false, target: "",
-      model: "", route: "", Vd: "", kel: "", tau: "", count: "", Tinf: "" },
+      model: "", route: "", paramMode: "macro",
+      // 1c micro
+      Vd: "", kel: "",
+      // absorption
+      F: "", ka: "",
+      // 2c macro
+      A: "", alpha: "", B: "", beta: "",
+      // 2c micro
+      k10: "", k12: "", k21: "", V1: "",
+      // 3c macro
+      A3: "", alpha3: "", B3: "", beta3: "", C3: "", gamma3: "",
+      // 3c micro
+      k103: "", k123: "", k213: "", k133: "", k313: "", V13: "", V23: "", V33: "",
+      tau: "", count: "", Tinf: "" },
     { label: "150 mg q8h", units: "mg", dose: 150, weightKg: 70, optimize: false, target: "",
-      model: "", route: "", Vd: "", kel: "", tau: "", count: "", Tinf: "" },
+      model: "", route: "", paramMode: "macro",
+      Vd: "", kel: "", F: "", ka: "",
+      A: "", alpha: "", B: "", beta: "",
+      k10: "", k12: "", k21: "", V1: "",
+      A3: "", alpha3: "", B3: "", beta3: "", C3: "", gamma3: "",
+      k103: "", k123: "", k213: "", k133: "", k313: "", V13: "", V23: "", V33: "",
+      tau: "", count: "", Tinf: "" },
     { label: "2 mg/kg q8h (70 kg)", units: "mg/kg", dose: 2, weightKg: 70, optimize: false, target: "",
-      model: "", route: "", Vd: "", kel: "", tau: "", count: "", Tinf: "" },
+      model: "", route: "", paramMode: "macro",
+      Vd: "", kel: "", F: "", ka: "",
+      A: "", alpha: "", B: "", beta: "",
+      k10: "", k12: "", k21: "", V1: "",
+      A3: "", alpha3: "", B3: "", beta3: "", C3: "", gamma3: "",
+      k103: "", k123: "", k213: "", k133: "", k313: "", V13: "", V23: "", V33: "",
+      tau: "", count: "", Tinf: "" },
     { label: "Optimize to Cmax_ss=10", units: "mg", dose: 100, weightKg: 70, optimize: true, target: "10",
-      model: "", route: "", Vd: "", kel: "", tau: "", count: "", Tinf: "" },
+      model: "1c", route: "iv_bolus", paramMode: "macro",
+      Vd: "", kel: "", F: "", ka: "",
+      A: "", alpha: "", B: "", beta: "",
+      k10: "", k12: "", k21: "", V1: "",
+      A3: "", alpha3: "", B3: "", beta3: "", C3: "", gamma3: "",
+      k103: "", k123: "", k213: "", k133: "", k313: "", V13: "", V23: "", V33: "",
+      tau: "", count: "", Tinf: "" },
   ]);
  
 
@@ -91,10 +124,45 @@ export default function CompareDemo() {
     model: (r.model ?? "").toString(),
     route: (r.route ?? "").toString(),
     params: { ...(r.params || {}) },
+
+    // param mode 
+    paramMode: (r.paramMode ?? r.param_mode ?? (
+      // derive from presence of micro params in uploaded JSON
+      (r.params && (r.params.k10 != null || r.params.k13 != null)) ? "micro" : "macro"
+    )).toString() || "macro",
+    // 1c micro
     Vd: r.params?.Vd ?? (r.Vd ?? ""),
     kel: r.params?.kel ?? (r.kel ?? ""),
+    // absorption (1c/2c/3c orally/SC)
     F: r.params?.F ?? (r.F ?? ""),
     ka: r.params?.ka ?? (r.ka ?? ""),
+    // 2c macro
+    A: r.params?.A ?? (r.A ?? ""),
+    alpha: r.params?.alpha ?? (r.alpha ?? ""),
+    B: r.params?.B ?? (r.B ?? ""),
+    beta: r.params?.beta ?? (r.beta ?? ""),
+    // 2c micro
+    k10: r.params?.k10 ?? (r.k10 ?? ""),
+    k12: r.params?.k12 ?? (r.k12 ?? ""),
+    k21: r.params?.k21 ?? (r.k21 ?? ""),
+    V1:  r.params?.V1  ?? (r.V1  ?? ""),
+    // 3c macro
+    A3: r.params?.A ?? (r.A3 ?? ""),
+    alpha3: r.params?.alpha ?? (r.alpha3 ?? ""),
+    B3: r.params?.B ?? (r.B3 ?? ""),
+    beta3: r.params?.beta ?? (r.beta3 ?? ""),
+    C3: r.params?.C ?? (r.C3 ?? ""),
+    gamma3: r.params?.gamma ?? (r.gamma3 ?? ""),
+    // 3c micro
+    k103: r.params?.k10 ?? (r.k103 ?? ""),
+    k123: r.params?.k12 ?? (r.k123 ?? ""),
+    k213: r.params?.k21 ?? (r.k213 ?? ""),
+    k133: r.params?.k13 ?? (r.k133 ?? ""),
+    k313: r.params?.k31 ?? (r.k313 ?? ""),
+    V13:  r.params?.V1  ?? (r.V13  ?? ""),
+    V23:  r.params?.V2  ?? (r.V23  ?? ""),
+    V33:  r.params?.V3  ?? (r.V33  ?? ""),
+
     tau: r.tau ?? "",
     count: r.count ?? "",
     Tinf: (r.Tinf ?? r.params?.Tinf ?? r.tinf ?? ""),
@@ -127,6 +195,15 @@ export default function CompareDemo() {
       const dose  = Number(ds.dose_mg_per_kg ?? ds.dose_mg ?? 0);
       const weightKg = Number(s.weight_kg ?? s.weightKg ?? 70);
       const opt = s.optimize && typeof s.optimize.target_Cmax_ss === "number";
+      // detect macro vs micro for 2c/3c
+      const pm = (() => {
+        const p = s.params || {};
+        if (s.model === "2c" || s.model === "3c") {
+          const looksMicro = ["k10","k12","k21","k13","k31","V1","V2","V3"].some(k => p[k] != null);
+          return looksMicro ? "micro" : "macro";
+        }
+        return "macro";
+      })();
       return normalizeRow({
         label: s.label,
         units,
@@ -136,13 +213,14 @@ export default function CompareDemo() {
         target: opt ? String(s.optimize.target_Cmax_ss) : "",
         model: s.model,
         route: s.route,
+        paramMode: pm,
         params: s.params,
         tau: s.tau,
         count: s.count,
         Tinf: (s.Tinf ?? s.params?.Tinf),
       });
     });
-    setRows(newRows);
+    setRows(newRows.map(r => pruneRowForSelection(r, { model, route })));
   };
   const handleUploadJSON = async (e) => {
     const f = e.target.files?.[0];
@@ -170,27 +248,84 @@ export default function CompareDemo() {
       const effRoute = (r.route || route).trim();
       const effVd    = r.Vd === "" ? Vd : Number(r.Vd);
       const effKel   = r.kel === "" ? kel : Number(r.kel);
-      const effF     = r.F === "" ? undefined : Number(r.F);
-      const effKa    = r.ka === "" ? undefined : Number(r.ka);
+      const effF     = r.F === "" ? (["oral","sc"].includes(effRoute) ? F : undefined) : Number(r.F);
+      const effKa    = r.ka === "" ? (["oral","sc"].includes(effRoute) ? ka : undefined) : Number(r.ka);
       const effTau   = r.tau === "" ? tau : Number(r.tau);
       const effCount = r.count === "" ? count : Number(r.count);
       const effTinf  = r.Tinf === "" ? Tinf : Number(r.Tinf);
 
-
-      const rawParams =
-        (r.params && Object.keys(r.params).length)
-          ? r.params                       // pass-through macro/micro/F/ka, etc.
-          : { Vd: effVd, kel: effKel };    // fallback for 1c
-
-      const paramsCoerced = Object.fromEntries(
-        Object.entries(rawParams).map(([k,v]) => [k, Number(v)])
-      );
+      // Build params by model & param mode; row fields override params bag; fall back to globals
+      let params = {};
+      if ((effModel || "1c") === "1c") {
+        params = { Vd: effVd, kel: effKel };
+        if (["oral","sc"].includes(effRoute)) {
+          if (effF != null) params.F = Number(effF);
+          if (effKa != null) params.ka = Number(effKa);
+        }
+      } else if (effModel === "2c") {
+        const pm = (r.paramMode || "macro").toLowerCase();
+        if (pm === "macro") {
+          params = {
+            A: numPick(r.A, r.params?.A),
+            alpha: numPick(r.alpha, r.params?.alpha),
+            B: numPick(r.B, r.params?.B),
+            beta: numPick(r.beta, r.params?.beta),
+          };
+        } else {
+          params = {
+            k10: numPick(r.k10, r.params?.k10),
+            k12: numPick(r.k12, r.params?.k12),
+            k21: numPick(r.k21, r.params?.k21),
+            V1:  numPick(r.V1,  r.params?.V1),
+            ...(r.params?.V2 != null || r.V2 != null ? { V2: numPick(r.V2, r.params?.V2) } : {})
+          };
+        }
+        if (["oral","sc"].includes(effRoute)) {
+          if (effF != null) params.F = Number(effF);
+          if (effKa != null) params.ka = Number(effKa);
+        }
+      } else if (effModel === "3c") {
+        const pm = (r.paramMode || "macro").toLowerCase();
+        if (pm === "macro") {
+          params = {
+            A: numPick(r.A3 ?? r.A, r.params?.A),
+            alpha: numPick(r.alpha3 ?? r.alpha, r.params?.alpha),
+            B: numPick(r.B3 ?? r.B, r.params?.B),
+            beta: numPick(r.beta3 ?? r.beta, r.params?.beta),
+            C: numPick(r.C3 ?? r.C, r.params?.C),
+            gamma: numPick(r.gamma3 ?? r.gamma, r.params?.gamma),
+          };
+        } else {
+          params = {
+            k10: numPick(r.k103 ?? r.k10, r.params?.k10),
+            k12: numPick(r.k123 ?? r.k12, r.params?.k12),
+            k21: numPick(r.k213 ?? r.k21, r.params?.k21),
+            k13: numPick(r.k133 ?? r.k13, r.params?.k13),
+            k31: numPick(r.k313 ?? r.k31, r.params?.k31),
+            V1:  numPick(r.V13 ?? r.V1,  r.params?.V1),
+            V2:  numPick(r.V23 ?? r.V2,  r.params?.V2),
+            V3:  numPick(r.V33 ?? r.V3,  r.params?.V3),
+          };
+        }
+        if (["oral","sc"].includes(effRoute)) {
+          if (effF != null) params.F = Number(effF);
+          if (effKa != null) params.ka = Number(effKa);
+        }
+      }
+      // fill from r.params any missing numeric fields (conservative merge)
+      if (r.params) {
+        for (const [k,v] of Object.entries(r.params)) {
+          if ((params[k] == null || params[k] === "") && Number.isFinite(Number(v))) {
+            params[k] = Number(v);
+          }
+        }
+      }
 
       const base = {
         label: r.label || "Regimen",
         model: effModel || "1c",
         route: effRoute || "iv_bolus",
-        params: paramsCoerced,
+        params,
         tau: Number(effTau), count: Number(effCount),
         start: Number(start), t_end: Number(tEnd), dt: Number(dt),
       };
@@ -275,8 +410,37 @@ export default function CompareDemo() {
             <col style={{ width: 240 }} />  {/* Label */}
             <col style={{ width: 120 }} />  {/* Model */}
             <col style={{ width: 120 }} />  {/* Route */}
-            <col style={{ width: 90  }} />  {/* Vd */}
-            <col style={{ width: 100 }} />  {/* kel */}
+            <col style={{ width: 110 }} />  {/* Param mode */}
+            <col style={{ width: 90  }} />  {/* Vd (1c) */}
+            <col style={{ width: 100 }} />  {/* kel (1c) */}
+            <col style={{ width: 80  }} />  {/* F (oral/sc) */}
+            <col style={{ width: 80  }} />  {/* ka (oral/sc) */}
+            {/* 2c macro */}
+            <col style={{ width: 80  }} />  {/* A */}
+            <col style={{ width: 80  }} />  {/* alpha */}
+            <col style={{ width: 80  }} />  {/* B */}
+            <col style={{ width: 80  }} />  {/* beta */}
+            {/* 2c micro */}
+            <col style={{ width: 80  }} />  {/* k10 */}
+            <col style={{ width: 80  }} />  {/* k12 */}
+            <col style={{ width: 80  }} />  {/* k21 */}
+            <col style={{ width: 80  }} />  {/* V1 */}
+            {/* 3c macro */}
+            <col style={{ width: 80  }} />  {/* A3 */}
+            <col style={{ width: 80  }} />  {/* alpha3 */}
+            <col style={{ width: 80  }} />  {/* B3 */}
+            <col style={{ width: 80  }} />  {/* beta3 */}
+            <col style={{ width: 80  }} />  {/* C3 */}
+            <col style={{ width: 80  }} />  {/* gamma3 */}
+            {/* 3c micro */}
+            <col style={{ width: 80  }} />  {/* k103 */}
+            <col style={{ width: 80  }} />  {/* k123 */}
+            <col style={{ width: 80  }} />  {/* k213 */}
+            <col style={{ width: 80  }} />  {/* k133 */}
+            <col style={{ width: 80  }} />  {/* k313 */}
+            <col style={{ width: 80  }} />  {/* V13 */}
+            <col style={{ width: 80  }} />  {/* V23 */}
+            <col style={{ width: 80  }} />  {/* V33 */}
             <col style={{ width: 80  }} />  {/* τ */}
             <col style={{ width: 90  }} />  {/* #doses */}
             <col style={{ width: 90  }} />  {/* Tinf */}
@@ -291,8 +455,15 @@ export default function CompareDemo() {
               <th>Label</th>
               <th>Model</th>
               <th>Route</th>
+              <th>Mode</th>
               <th>Vd (L)</th>
               <th>kel (1/h)</th>
+              <th>F</th>
+              <th>ka (1/h)</th>
+              <th colSpan="4">2c (macro)</th>
+              <th colSpan="4">2c (micro)</th>
+              <th colSpan="6">3c (macro)</th>
+              <th colSpan="8">3c (micro)</th>
               <th>τ (h)</th>
               <th>#doses</th>
               <th>Tinf (h)</th>
@@ -301,6 +472,15 @@ export default function CompareDemo() {
               <th>Weight (kg)</th>
               <th>Optimize Cmax_ss</th>
               <th></th>
+            </tr>
+            <tr style={{fontSize:"0.8rem", color:"#666"}}>
+              <th></th><th></th><th></th><th></th>
+              <th>Vd</th><th>kel</th><th>F</th><th>ka</th>
+              <th>A</th><th>α</th><th>B</th><th>β</th>
+              <th>k10</th><th>k12</th><th>k21</th><th>V1</th>
+              <th>A</th><th>α</th><th>B</th><th>β</th><th>C</th><th>γ</th>
+              <th>k10</th><th>k12</th><th>k21</th><th>k13</th><th>k31</th><th>V1</th><th>V2</th><th>V3</th>
+              <th>τ</th><th>#</th><th>Tinf</th><th></th><th></th><th></th><th></th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -313,7 +493,10 @@ export default function CompareDemo() {
                   <select
                     value={r.model}
                     onChange={e=>{
-                      const c=[...rows]; c[i]={...c[i],model:e.target.value}; setRows(c);
+                      const c=[...rows];
+                      const updated = { ...c[i], model: e.target.value };
+                      c[i] = pruneRowForSelection(updated, { model, route });
+                      setRows(c);
                     }}
                     style={{ width: "100%", minWidth: 110, fontSize: "0.95rem", padding: "6px 8px" }}
                   >
@@ -324,39 +507,99 @@ export default function CompareDemo() {
                   </select>
                 </td>
                 <td>
-                  <select value={r.route} onChange={e=>{
-                    const c=[...rows]; c[i]={...c[i],route:e.target.value}; setRows(c);
-                  }}>
+                <select value={r.route} onChange={e=>{
+                  const c=[...rows];
+                  const updated = { ...c[i], route: e.target.value };
+                  c[i] = pruneRowForSelection(updated, { model, route: e.target.value });
+                  setRows(c);
+                }}>
                     <option value="">(inherit)</option>
                     <option value="iv_bolus">IV bolus</option>
                     <option value="iv_infusion">IV infusion</option>
-                    <option value="oral" disabled>Oral</option>
-                    <option value="sc" disabled>SC</option>
+                    <option value="oral">Oral</option>
+                    <option value="sc">SC</option>
+                  </select>
+                </td>
+                {/* param mode (only 2c/3c) */}
+                <td>
+                <select
+                  value={r.paramMode || "macro"}
+                  onChange={e=>{
+                    const c=[...rows];
+                    const updated = { ...c[i], paramMode: e.target.value };
+                    c[i] = pruneRowForSelection(updated, { model, route });
+                    setRows(c);
+                  }}
+                  disabled={((r.model||model) === "1c")}
+                    style={{ width: "100%" }}
+                  >
+                    <option value="macro">macro</option>
+                    <option value="micro">micro</option>
                   </select>
                 </td>
                 <td>
-                  <input
-                    type="number"
-                    placeholder={String(Vd)}
+                  <ParamCell
+                    enabled={(r.model||model) === "1c"}
                     value={r.Vd}
-                    onChange={e=>{
-                      const c=[...rows]; c[i]={...c[i],Vd:e.target.value}; setRows(c);
-                    }}
-                    style={{ width: "100%" }}
+                    placeholder={String(Vd)}
+                    onChange={e=>{ const c=[...rows]; c[i]={...c[i],Vd:e.target.value}; setRows(c); }}
                   />
                 </td>
                 <td>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder={String(kel)}
+                  <ParamCell
+                    enabled={(r.model||model) === "1c"}
                     value={r.kel}
-                    onChange={e=>{
-                      const c=[...rows]; c[i]={...c[i],kel:e.target.value}; setRows(c);
-                    }}
-                    style={{ width: "100%" }}
+                    placeholder={String(kel)}
+                    step="0.01"
+                    onChange={e=>{ const c=[...rows]; c[i]={...c[i],kel:e.target.value}; setRows(c); }}
                   />
                 </td>
+                {/* F / ka shown only for oral or sc */}
+                <td>
+                  <ParamCell
+                    enabled={["oral","sc"].includes((r.route||route))}
+                    value={r.F}
+                    placeholder={String(F)}
+                    step="0.01"
+                    onChange={e=>{const c=[...rows]; c[i]={...c[i],F:e.target.value}; setRows(c);}}
+                  />
+                </td>
+                <td>
+                  <ParamCell
+                    enabled={["oral","sc"].includes((r.route||route))}
+                    value={r.ka}
+                    placeholder={String(ka)}
+                    step="0.01"
+                    onChange={e=>{const c=[...rows]; c[i]={...c[i],ka:e.target.value}; setRows(c);}}
+                  />
+                </td>
+                {/* 2c macro: A, alpha, B, beta */}
+                <td><ParamCell enabled={(r.model||model)==="2c" && (r.paramMode||"macro")==="macro"} value={r.A} placeholder="A" title="2c macro: A" onChange={e=>{const c=[...rows]; c[i]={...c[i],A:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="2c" && (r.paramMode||"macro")==="macro"} value={r.alpha} placeholder="alpha" title="2c macro: alpha" onChange={e=>{const c=[...rows]; c[i]={...c[i],alpha:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="2c" && (r.paramMode||"macro")==="macro"} value={r.B}     placeholder="B"     title="2c macro: B"     onChange={e=>{const c=[...rows]; c[i]={...c[i],B:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="2c" && (r.paramMode||"macro")==="macro"} value={r.beta}  placeholder="beta"  title="2c macro: beta"  onChange={e=>{const c=[...rows]; c[i]={...c[i],beta:e.target.value}; setRows(c);}} /></td>
+                {/* 2c micro: k10,k12,k21,V1 */}
+                <td><ParamCell enabled={(r.model||model)==="2c" && (r.paramMode||"macro")==="micro"} value={r.k10} placeholder="k10" title="2c micro: k10" onChange={e=>{const c=[...rows]; c[i]={...c[i],k10:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="2c" && (r.paramMode||"macro")==="micro"} value={r.k12} placeholder="k12" title="2c micro: k12" onChange={e=>{const c=[...rows]; c[i]={...c[i],k12:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="2c" && (r.paramMode||"macro")==="micro"} value={r.k21} placeholder="k21" title="2c micro: k21" onChange={e=>{const c=[...rows]; c[i]={...c[i],k21:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="2c" && (r.paramMode||"macro")==="micro"} value={r.V1}  placeholder="V1"  title="2c micro: V1"  onChange={e=>{const c=[...rows]; c[i]={...c[i],V1:e.target.value};  setRows(c);}} /></td>
+                {/* 3c macro */}
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="macro"} value={r.A3}     placeholder="A"     title="3c macro: A"     onChange={e=>{const c=[...rows]; c[i]={...c[i],A3:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="macro"} value={r.alpha3} placeholder="alpha" title="3c macro: alpha" onChange={e=>{const c=[...rows]; c[i]={...c[i],alpha3:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="macro"} value={r.B3}     placeholder="B"     title="3c macro: B"     onChange={e=>{const c=[...rows]; c[i]={...c[i],B3:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="macro"} value={r.beta3}  placeholder="beta"  title="3c macro: beta"  onChange={e=>{const c=[...rows]; c[i]={...c[i],beta3:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="macro"} value={r.C3}     placeholder="C"     title="3c macro: C"     onChange={e=>{const c=[...rows]; c[i]={...c[i],C3:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="macro"} value={r.gamma3} placeholder="gamma" title="3c macro: gamma" onChange={e=>{const c=[...rows]; c[i]={...c[i],gamma3:e.target.value}; setRows(c);}} /></td>
+
+                {/* 3c micro */}
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="micro"} value={r.k103} placeholder="k10" title="3c micro: k10" onChange={e=>{const c=[...rows]; c[i]={...c[i],k103:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="micro"} value={r.k123} placeholder="k12" title="3c micro: k12" onChange={e=>{const c=[...rows]; c[i]={...c[i],k123:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="micro"} value={r.k213} placeholder="k21" title="3c micro: k21" onChange={e=>{const c=[...rows]; c[i]={...c[i],k213:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="micro"} value={r.k133} placeholder="k13" title="3c micro: k13" onChange={e=>{const c=[...rows]; c[i]={...c[i],k133:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="micro"} value={r.k313} placeholder="k31" title="3c micro: k31" onChange={e=>{const c=[...rows]; c[i]={...c[i],k313:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="micro"} value={r.V13}  placeholder="V1" title="3c micro: V1" onChange={e=>{const c=[...rows]; c[i]={...c[i],V13:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="micro"} value={r.V23}  placeholder="V2" title="3c micro: V2" onChange={e=>{const c=[...rows]; c[i]={...c[i],V23:e.target.value}; setRows(c);}} /></td>
+                <td><ParamCell enabled={(r.model||model)==="3c" && (r.paramMode||"macro")==="micro"} value={r.V33}  placeholder="V3" title="3c micro: V3" onChange={e=>{const c=[...rows]; c[i]={...c[i],V33:e.target.value}; setRows(c);}} /></td>
                 <td>
                   <input
                     type="number"
@@ -381,18 +624,13 @@ export default function CompareDemo() {
                   />
                 </td>
                 <td>
-                  {((r.route || route) === "iv_infusion") ? (
-                    <input
-                      type="number"
-                      step="0.1"
-                      placeholder={String(Tinf)}
-                      value={r.Tinf}
-                      onChange={e=>{
-                        const c=[...rows]; c[i]={...c[i],Tinf:e.target.value}; setRows(c);
-                      }}
-                      style={{ width: "100%" }}
-                    />
-                  ) : <span style={{color:"#888"}}>—</span>}
+                <ParamCell
+                  enabled={(r.route || route) === "iv_infusion"}
+                  value={r.Tinf}
+                  placeholder={String(Tinf)}
+                  step="0.1"
+                  onChange={e=>{ const c=[...rows]; c[i]={...c[i],Tinf:e.target.value}; setRows(c); }}
+                />
                 </td>
                 <td>
                   <select value={r.units} onChange={e=>{
@@ -461,12 +699,15 @@ export default function CompareDemo() {
           </tbody>
         </table>
         <div style={{marginTop:8, display:"flex", gap:8}}>
-          <button onClick={()=>setRows([...rows, normalizeRow({label:"New regimen", units:"mg", dose:100, weightKg:70, optimize:false, target:"", route, tau, count, start, Tinf})])}>+ Add regimen</button>
+          <button onClick={()=>setRows([...rows, normalizeRow({
+            label:"New regimen", units:"mg", dose:100, weightKg:70, optimize:false, target:"",
+            route, tau, count, start, Tinf, paramMode:"macro"
+          })])}>+ Add regimen</button>
           <button onClick={()=>setRows([
-            normalizeRow({ label:"100 mg q8h", units:"mg", dose:100, weightKg:70, route, tau, count, start, Tinf }),
-            normalizeRow({ label:"150 mg q8h", units:"mg", dose:150, weightKg:70, route, tau, count, start, Tinf }),
-            normalizeRow({ label:"2 mg/kg q8h (70 kg)", units:"mg/kg", dose:2, weightKg:70, route, tau, count, start, Tinf }),
-            normalizeRow({ label:"Optimize to Cmax_ss=10", units:"mg", dose:100, weightKg:70, optimize:true, target:"10", route:"iv_bolus", tau, count, start, Tinf }),
+            normalizeRow({ label:"100 mg q8h", units:"mg", dose:100, weightKg:70, route, tau, count, start, Tinf, paramMode:"macro" }),
+            normalizeRow({ label:"150 mg q8h", units:"mg", dose:150, weightKg:70, route, tau, count, start, Tinf, paramMode:"macro" }),
+            normalizeRow({ label:"2 mg/kg q8h (70 kg)", units:"mg/kg", dose:2, weightKg:70, route, tau, count, start, Tinf, paramMode:"macro" }),
+            normalizeRow({ label:"Optimize to Cmax_ss=10", units:"mg", dose:100, weightKg:70, optimize:true, target:"10", route:"iv_bolus", tau, count, start, Tinf, paramMode:"macro" }),
           ])}>Load Default</button>
           <button onClick={()=>fileRef.current?.click()}>Upload JSON…</button>
           <input
@@ -489,21 +730,30 @@ export default function CompareDemo() {
   const effRoute = (r.route || route).trim() || "iv_bolus";
   const effVd    = r.Vd === "" ? Vd : Number(r.Vd);
   const effKel   = r.kel === "" ? kel : Number(r.kel);
-  const effF     = r.F === "" ? undefined : Number(r.F);
-  const effKa    = r.ka === "" ? undefined : Number(r.ka);
+  const effF     = r.F === "" ? (["oral","sc"].includes(effRoute) ? F : undefined) : Number(r.F);
+  const effKa    = r.ka === "" ? (["oral","sc"].includes(effRoute) ? ka : undefined) : Number(r.ka);
   const effTau   = r.tau === "" ? tau : Number(r.tau);
   const effCount = r.count === "" ? count : Number(r.count);
   const effTinf  = r.Tinf === "" ? Tinf : Number(r.Tinf);
-  const rawParams =
-    (r.params && Object.keys(r.params).length)
-      ? r.params
-      : { Vd: effVd, kel: effKel };
-  const paramsCoerced = Object.fromEntries(
-    Object.entries(rawParams).map(([k,v]) => [k, Number(v)])
-  );
+  const PM = (r.paramMode || "macro").toLowerCase();
+  let params = {};
+  if (effModel === "1c") {
+    params = { Vd: effVd, kel: effKel };
+    if (["oral","sc"].includes(effRoute)) { if (effF!=null) params.F=Number(effF); if (effKa!=null) params.ka=Number(effKa); }
+  } else if (effModel === "2c") {
+    params = PM === "macro"
+      ? { A: Number(r.A||0), alpha: Number(r.alpha||0), B: Number(r.B||0), beta: Number(r.beta||0) }
+      : { k10: Number(r.k10||0), k12: Number(r.k12||0), k21: Number(r.k21||0), V1: Number(r.V1||0) };
+    if (["oral","sc"].includes(effRoute)) { if (effF!=null) params.F=Number(effF); if (effKa!=null) params.ka=Number(effKa); }
+  } else {
+    params = PM === "macro"
+      ? { A: Number((r.A3??r.A)||0), alpha: Number((r.alpha3??r.alpha)||0), B: Number((r.B3??r.B)||0), beta: Number((r.beta3??r.beta)||0), C: Number((r.C3??r.C)||0), gamma: Number((r.gamma3??r.gamma)||0) }
+      : { k10: Number((r.k103??r.k10)||0), k12: Number((r.k123??r.k12)||0), k21: Number((r.k213??r.k21)||0), k13: Number((r.k133??r.k13)||0), k31: Number((r.k313??r.k31)||0), V1: Number((r.V13??r.V1)||0), V2: Number((r.V23??r.V2)||0), V3: Number((r.V33??r.V3)||0) };
+    if (["oral","sc"].includes(effRoute)) { if (effF!=null) params.F=Number(effF); if (effKa!=null) params.ka=Number(effKa); }
+  }
   return {
    label: r.label, model: effModel, route: effRoute,
-   params: paramsCoerced,
+   params,
     tau: effTau, count: effCount, start, t_end: tEnd, dt,
    ...(effRoute==="iv_infusion"
       ? { Tinf: (r.Tinf === "" ? (r.params?.Tinf ?? Tinf) : Number(r.Tinf)) }
@@ -532,4 +782,54 @@ export default function CompareDemo() {
       )}
     </div>
   );
+}
+
+// helper: first numeric of [rowField, paramsField]
+function numPick(rowV, paramsV) {
+  if (rowV !== "" && rowV != null && Number.isFinite(Number(rowV))) return Number(rowV);
+  if (paramsV != null && Number.isFinite(Number(paramsV))) return Number(paramsV);
+  return undefined;
+}
+
+function ParamCell({ enabled, value, placeholder, step, title, onChange, style }) {
+  if (!enabled) return <span style={{ color: "#888" }}>—</span>;
+  return (
+    <input
+      type="number"
+      value={value}
+      placeholder={placeholder}
+      step={step}
+      title={title}
+      onChange={onChange}
+      style={{ width: "100%", ...(style || {}) }}
+    />
+  );
+}
+
+// when model/route/paramMode changes, blank out fields that no longer apply
+function pruneRowForSelection(row, globals) {
+  const effModel = (row.model || globals.model || "1c").trim();
+  const effRoute = (row.route || globals.route || "iv_bolus").trim();
+  const effPM    = (row.paramMode || "macro").toLowerCase();
+  const is1c = effModel === "1c";
+  const is2c = effModel === "2c";
+  const is3c = effModel === "3c";
+  const oralSC = ["oral", "sc"].includes(effRoute);
+
+  const next = { ...row };
+  // absorption only for oral/SC
+  if (!oralSC) { next.F = ""; next.ka = ""; }
+  // 1c only
+  if (!is1c) { next.Vd = ""; next.kel = ""; }
+  // 2c macro
+  if (!(is2c && effPM === "macro")) { next.A = ""; next.alpha = ""; next.B = ""; next.beta = ""; }
+  // 2c micro
+  if (!(is2c && effPM === "micro")) { next.k10 = ""; next.k12 = ""; next.k21 = ""; next.V1 = ""; }
+  // 3c macro
+  if (!(is3c && effPM === "macro")) { next.A3 = ""; next.alpha3 = ""; next.B3 = ""; next.beta3 = ""; next.C3 = ""; next.gamma3 = ""; }
+  // 3c micro
+  if (!(is3c && effPM === "micro")) { next.k103 = ""; next.k123 = ""; next.k213 = ""; next.k133 = ""; next.k313 = ""; next.V13 = ""; next.V23 = ""; next.V33 = ""; }
+  // infusion time only for iv_infusion
+  if (effRoute !== "iv_infusion") { next.Tinf = ""; }
+  return next;
 }

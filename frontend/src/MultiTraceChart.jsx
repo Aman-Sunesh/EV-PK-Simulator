@@ -90,7 +90,7 @@ export default function MultiTraceChart({
   const headerPadY = 10; // top padding above the first line
   const headerH = headerLines.length ? headerPadY + headerBlockH : 0;
   const yLabelSpace = 28; // room for rotated Y label on the left
-  const legendRowH = 20;  // row height per legend item
+  const legendRowH = 22;  // row height per legend item
   const innerW = width - (2 * padding + yLabelSpace);
   const legendCols = Math.min(2, Math.max(1, Math.round(legendColumns)));
   const colGap = 24;
@@ -168,21 +168,34 @@ export default function MultiTraceChart({
           {series.map((s, i) => {
             const col = i % legendCols;
             const row = Math.floor(i / legendCols);
-            const lx = plotLeft + 10 + col * (legendCellW + colGap);
+            const lx = plotLeft + 12 + col * (legendCellW + colGap);
             const ly = padding + headerH + 6 + row * legendRowH;
+            const yMid = 10; // vertical center for the item row
+            const label = (typeof s.label === "string" && s.label.trim())
+              ? s.label
+              : `Series ${i + 1}`;
             return (
               <g key={i} transform={`translate(${lx}, ${ly})`}>
-                <rect width="14" height="3" fill={palette[i % palette.length]} />
+                <rect
+                  x="0"
+                  y={yMid - 5}
+                  width="18"
+                  height="10"
+                  rx="2"
+                  fill={palette[i % palette.length]}
+                  fillOpacity="0.9"
+                />
                 <text
-                  x="18"
-                  y="4"
+                  x="24"
+                  y={yMid}
                   fontSize="12"
-                  dominantBaseline="hanging"
+                  alignmentBaseline="middle"
+                  dominantBaseline="middle"
                   fill="#334155"
                 >
-                  {s.label ?? `Series ${i + 1}`}
+                  {label}
                 </text>
-                <title>{s.label ?? `Series ${i + 1}`}</title>
+                <title>{label}</title>
               </g>
             );
           })}

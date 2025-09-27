@@ -6,7 +6,7 @@ A CSV‑first, demotion‑aware pharmacokinetics toolkit for extracellular vesic
 
 ---
 
-## Table of Contents 
+## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)

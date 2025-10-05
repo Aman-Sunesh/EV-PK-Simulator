@@ -40,9 +40,12 @@ def expand_program(program: List[Dict], route: str, default_Tinf: Optional[float
 
     Supported steps (examples):
       {"type":"bolus","time":0,"dose":100}
+      {"type":"bolus","time":0,"dose":100,"tau":8,"count":6}
       {"type":"infusion","start":0,"dose":200,"Tinf":1.0}
       {"type":"repeat","pattern":"bolus","start":0,"tau":8,"count":6,"dose":100}
       {"type":"repeat","pattern":"infusion","start":0,"tau":24,"count":5,"dose":2400,"Tinf":8}
+      {"type":"repeat_bolus","start":0,"tau":8,"count":6,"dose":100}
+      {"type":"repeat_infusion","start":0,"tau":24,"count":5,"dose":2400,"Tinf":8}
       {"type":"titrate","start":0,"tau":24,"steps":[{"dose":200},{"dose":150},{"dose":100}]}
       {"type":"onoff","start":0,"duration":72,"dose":2400,"dose_on":8,"dose_off":16}  # infusion on/off windows
     Notes:
@@ -55,16 +58,24 @@ def expand_program(program: List[Dict], route: str, default_Tinf: Optional[float
     for step in (program or []):
         t = step.get("type","").lower()
 
-        if t == "bolus":
-            ti = float(step["time"]); d = float(step["dose"]); _pos("dose", d)
-            dosing.append({"time": ti, "dose": d})
+        # accept 'dose' as an alias for 'bolus'
+        if t in ("bolus", "dose"):
+            ti = float(step.get("time", step.get("start", 0.0)))
+            d = float(step["dose"]); _pos("dose", d)
+            if ("tau" in step) or ("count" in step):
+                tau = float(step.get("tau", 0.0)); _pos("tau", tau)
+                cnt = int(step.get("count", 1));  _pos("count", cnt)
+                for i in range(cnt):
+                    dosing.append({"time": ti + i*tau, "dose": d})
+            else:
+                dosing.append({"time": ti, "dose": d})
 
         elif t == "infusion":
             st = float(step["start"]); d = float(step["dose"]); Tinf = float(step.get("Tinf", default_Tinf or 0.0))
             _pos("dose", d); _pos("Tinf", Tinf)
             dosing.append({"time": st, "dose": d, "Tinf": Tinf})
 
-        elif t == "repeat":
+        elif t in ("repeat", "repeat_bolus", "repeat-infusion", "repeat_infusion", "repeat-bolus"):
             pat = step.get("pattern","bolus").lower()
             start = float(step.get("start", 0.0))
             tau   = float(step["tau"]); _pos("tau", tau)

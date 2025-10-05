@@ -223,7 +223,7 @@ export default function MultiTraceChart({
       <line x1={plotLeft} y1={plotTop} x2={plotLeft} y2={height - plotBottom} stroke="#9ca3af" />
 
       {/* ticks & tick labels */}
-      <g fontSize="11" fill="#374151">
+      <g fontSize="11" fill="#111827" style={{ fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" }}>
         {/* x ticks */}
         {xTicks.map((t, i) => {
           const x = sx(t);

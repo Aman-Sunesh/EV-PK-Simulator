@@ -75,15 +75,39 @@ export default function Upload() {
     setProgram(prev => prev.filter((_,i)=>i!==idx));
   }
   // Add a repeat (bolus) step with sensible defaults from current controls
+  // Route-aware Plan Builder helpers
+  // NOTE: Plan Builder is route-agnostic by design; the *current route* (rxRoute) determines
+  // whether a "dose" is modeled as a bolus (oral/SC/IV-bolus) or as an infusion window (IV-infusion).
+  function addSingleDoseStep() {
+    const effDose = useMgPerKg ? repeatDose * weightKg : repeatDose; // mg
+    const start = Number(repeatStart) || 0;
+    if (rxRoute === "iv_infusion") {
+      setProgram(p => [...p, {
+        type: "infusion",
+        start,
+        dose: Number(effDose) || 100,
+        Tinf: Number(Tinf) || 1
+      }]);
+    } else {
+      setProgram(p => [...p, {
+        type: "bolus",
+        time: start,
+        dose: Number(effDose) || 100
+      }]);
+    }
+  }
+  // Add a repeat dose step; uses pattern = 'infusion' only for IV infusion route.
   function addRepeatBolusStep() {
     const effDose = useMgPerKg ? repeatDose * weightKg : repeatDose; // mg
+    const pat = (rxRoute === "iv_infusion") ? "infusion" : "bolus"; // oral/sc are bolus events
     setProgram(p => [...p, {
       type: "repeat",
-      pattern: "bolus",
+      pattern: pat,
       start: Number(repeatStart) || 0,
       tau: Number(repeatTau) || 8,
       count: Number(repeatCount) || 3,
-      dose: Number(effDose) || 100
+      dose: Number(effDose) || 100,
+      ...(pat === "infusion" ? { Tinf: Number(Tinf) || 1 } : {})
     }]);
   }
 
@@ -91,9 +115,6 @@ export default function Upload() {
   const [sim, setSim] = useState(null); // {time, conc, summary, dosing}
   // Simulate UI tabs
   const [simTab, setSimTab] = useState("route"); // 'route' | 'dosing' | 'whatif'
-  // Dosing sub-mode: 'builder' (Plan Builder) or 'schedule' (Manual Schedule)
-  const [dosingMode, setDosingMode] = useState('builder');
-
 
   // Mechanistic two-compartment parameters
   const [k10, setK10] = useState(PRESETS[preset].twoμ.k10);
@@ -927,24 +948,33 @@ const onDrop = useCallback(async (files) => {
     }
   };
 
-  // Simple SVG plot
-  const Plot = ({
-    time,
-    conc,
-    dosing,
-    width = 700,
-    height = 300,
-    margin = 40,
-    title,
-    xUnit = "h",
-    yUnit = "a.u."
-  }) => {
+  // Simple SVG plot with axis ticks & gridlines
+  const Plot = ({ time, conc, dosing, width = 700, height = 300, margin = 40, title, xUnit = "h", yUnit = "a.u." }) => {
     if (!time || !conc || time.length !== conc.length || time.length === 0) return null;
+
     const tmin = Math.min(...time), tmax = Math.max(...time);
-    const x = t => margin + (t - tmin) * (width - 2*margin) / (tmax - tmin || 1);
+    const x = t => margin + (t - tmin) * (width - 2 * margin) / (tmax - tmin || 1);
+
+    // Helpers for “nice” ticks
+    const niceNum = (range, round) => {
+      const exp = Math.floor(Math.log10(range || 1));
+      const f = (range || 1) / Math.pow(10, exp);
+      const nf = round ? (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10)
+                       : (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10);
+      return nf * Math.pow(10, exp);
+    };
+    const makeTicks = (min, max, count = 5) => {
+      const range = niceNum(max - min || 1, false);
+      const step = niceNum(range / Math.max(count - 1, 1), true);
+      const start = Math.ceil(min / step) * step;
+      const ticks = [];
+      for (let v = start; v <= max + 1e-9; v += step) ticks.push(v);
+      return ticks;
+    };
 
     // linear vs log-y scaling
-    let y, labelY;
+    let y, labelY, yTicks = [];
+    const xTicks = makeTicks(tmin, tmax, 6);
     if (logY) {
       const positives = conc.filter(v => v > 0);
       const eps = positives.length ? Math.min(...positives) * 0.1 : 1e-6;
@@ -952,27 +982,53 @@ const onDrop = useCallback(async (files) => {
       const cminL = Math.min(...logs), cmaxL = Math.max(...logs);
       y = c => {
         const cv = Math.log10(Math.max(c, eps));
-        return height - margin - (cv - cminL) * (height - 2*margin) / (cmaxL - cminL || 1);
+        return height - margin - (cv - cminL) * (height - 2 * margin) / (cmaxL - cminL || 1);
       };
       labelY = `log10 Conc (${yUnit})`;
+      // powers-of-ten ticks
+      const eMin = Math.ceil(cminL), eMax = Math.floor(cmaxL);
+      for (let e = eMin; e <= eMax; e++) yTicks.push(10 ** e);
     } else {
       const cmin = 0, cmax = Math.max(...conc) * 1.1 || 1;
-      y = c => height - margin - (c - cmin) * (height - 2*margin) / (cmax - cmin || 1);
+      y = c => height - margin - (c - cmin) * (height - 2 * margin) / (cmax - cmin || 1);
       labelY = `Conc (${yUnit})`;
+      yTicks = makeTicks(0, Math.max(...conc) || 1, 5);
     }
-    const pts = time.map((t,i) => `${x(t)},${y(conc[i])}`).join(" ");
+
+    const pts = time.map((t, i) => `${x(t)},${y(conc[i])}`).join(" ");
 
     return (
       <svg width={width} height={height} className="pk-chart">
         {/* title */}
         {title ? (
-          <text x={width/2} y={18} textAnchor="middle" fontSize="14" fontWeight="600">
-            {title}
-          </text>
+          <text x={width / 2} y={18} textAnchor="middle" fontSize="14" fontWeight="600">{title}</text>
         ) : null}
+
         {/* axes */}
-        <line x1={margin} y1={height-margin} x2={width-margin} y2={height-margin} stroke="#888"/>
-        <line x1={margin} y1={margin} x2={margin} y2={height-margin} stroke="#888"/>
+        <line x1={margin} y1={height - margin} x2={width - margin} y2={height - margin} stroke="#888" />
+        <line x1={margin} y1={margin} x2={margin} y2={height - margin} stroke="#888" />
+
+        {/* grid + tick labels (X) */}
+        {xTicks.map((v, i) => (
+          <g key={`xt${i}`}>
+            <line x1={x(v)} y1={height - margin} x2={x(v)} y2={margin} stroke="#ddd" />
+            <line x1={x(v)} y1={height - margin} x2={x(v)} y2={height - margin + 5} stroke="#888" />
+            <text x={x(v)} y={height - margin + 18} textAnchor="middle" fontSize="10">
+              {Number.isFinite(v) ? +v.toFixed(2) : ""}
+            </text>
+          </g>
+        ))}
+
+        {/* grid + tick labels (Y) */}
+        {yTicks.map((v, i) => (
+          <g key={`yt${i}`}>
+            <line x1={margin} y1={y(v)} x2={width - margin} y2={y(v)} stroke="#eee" />
+            <line x1={margin - 5} y1={y(v)} x2={margin} y2={y(v)} stroke="#888" />
+            <text x={margin - 8} y={y(v) + 3} textAnchor="end" fontSize="10">
+              {logY ? `1e${Math.round(Math.log10(v))}` : +v.toFixed(2)}
+            </text>
+          </g>
+        ))}
 
         {/* infusion spans (shaded) */}
         {rxRoute === "iv_infusion" && Array.isArray(dosing) && dosing.map((d, i) => {
@@ -980,23 +1036,24 @@ const onDrop = useCallback(async (files) => {
           if (!(tinf > 0)) return null;
           const x1 = x(d.time);
           const x2 = x(d.time + tinf);
-          const w  = Math.abs(x2 - x1);
+          const w = Math.abs(x2 - x1);
           const xL = Math.min(x1, x2);
           return (
-            <rect key={`span-${i}`} x={xL} y={margin} width={w} height={height - 2*margin}
-                  fill="#999" opacity="0.15" />
+            <rect key={`span-${i}`} x={xL} y={margin} width={w} height={height - 2 * margin} fill="#999" opacity="0.15" />
           );
         })}
 
         {/* curve */}
-        <polyline fill="none" stroke="#007bff" strokeWidth="2" points={pts}/>
+        <polyline fill="none" stroke="#007bff" strokeWidth="2" points={pts} />
+
         {/* dose ticks */}
         {Array.isArray(dosing) && dosing.map((d, i) => (
-          <line key={i} x1={x(d.time)} x2={x(d.time)} y1={height-margin} y2={margin} stroke="#bbb" strokeDasharray="3 4"/>
+          <line key={i} x1={x(d.time)} x2={x(d.time)} y1={height - margin} y2={margin} stroke="#bbb" strokeDasharray="3 4" />
         ))}
+
         {/* labels */}
-        <text x={width/2} y={height-8} textAnchor="middle" fontSize="12">Time ({xUnit})</text>
-        <text x={16} y={margin-10} fontSize="12">{labelY}</text>
+        <text x={width / 2} y={height - 8} textAnchor="middle" fontSize="12">Time ({xUnit})</text>
+        <text x={16} y={margin - 10} fontSize="12">{labelY}</text>
 
         {/* legend text */}
         <text x={width - margin} y={margin - 12} textAnchor="end" fontSize="12">
@@ -1009,7 +1066,7 @@ const onDrop = useCallback(async (files) => {
         {/* infusion legend swatch */}
         {rxRoute === "iv_infusion" && (
           <g transform={`translate(${width - margin - 140}, ${margin - 22})`}>
-            <rect x="0" y="0" width="18" height="8" fill="#999" opacity="0.15" stroke="#999"/>
+            <rect x="0" y="0" width="18" height="8" fill="#999" opacity="0.15" stroke="#999" />
             <text x="24" y="8" fontSize="12">Infusion window</text>
           </g>
         )}
@@ -2258,36 +2315,17 @@ const onDrop = useCallback(async (files) => {
                 </>
               )}
 
-              {/* DOSING TAB — program builder + repeat + schedule */}
+              {/* DOSING TAB — Plan Builder only */}
               {simTab === 'dosing' && (
                 <>
-          {/* Dosing sub-mode switch */}
-          <div className="input-row" style={{display:'flex', gap:8}}>
-            <strong style={{marginRight:8}}>Dosing mode:</strong>
-            <button
-              className={dosingMode==='builder'?'tab active':'tab'}
-              onClick={()=>setDosingMode('builder')}
-              type="button"
-            >
-              Plan Builder
-            </button>
-            <button
-              className={dosingMode==='schedule'?'tab active':'tab'}
-              onClick={()=>setDosingMode('schedule')}
-              type="button"
-            >
-              Manual Schedule
-            </button>
-          </div>
 
-          {/* ==== Plan Builder mode ==== */}
-          {dosingMode === 'builder' && (
+          {/* Plan Builder */}
             <>
               <div className="input-row">
                 <strong>Plan Builder</strong>&nbsp;
                 <button onClick={() => setProgram([...program, {type:"bolus", time:0, dose:100}])}>+ Add Bolus</button>
                 <button onClick={() => setProgram([...program, {type:"infusion", start:0, dose:1000, Tinf:1}])}>+ Add Infusion</button>
-                <button onClick={addRepeatBolusStep}>+ Repeat Bolus</button>
+                <button onClick={addRepeatBolusStep}>+ Repeat </button>
               </div>
                   {program.length > 0 && (
                     <div className="table-wrap">
@@ -2390,72 +2428,6 @@ const onDrop = useCallback(async (files) => {
                     </div>
                   )}
               </>
-            )}
-
-            {/* ==== Manual Schedule mode ==== */}
-            {dosingMode === 'schedule' && (
-              <>
-                <div className="input-row">
-                  <strong>Repeat Rule</strong>&nbsp;
-                  <label>Start (h)
-                    <input type="number" value={repeatStart}
-                          onChange={e=>setRepeatStart(+e.target.value)} />
-                  </label>
-                  <label>Every τ (h)
-                    <input type="number" value={repeatTau} step="0.5"
-                          onChange={e=>setRepeatTau(+e.target.value)} />
-                  </label>
-                  <label># doses
-                    <input type="number" value={repeatCount}
-                          onChange={e=>setRepeatCount(+e.target.value)} />
-                  </label>
-                  <label>Dose (mg)
-                    <input type="number" value={repeatDose}
-                          onChange={e=>setRepeatDose(+e.target.value)} />
-                  </label>
-                  {rxRoute === "iv_infusion" && (
-                    <label>Tinf (h)
-                      <input type="number" value={Tinf} step="0.1"
-                            onChange={e=>setTinf(+e.target.value)} />
-                    </label>
-                  )}
-                </div>
-
-                <div className="input-row"><strong>Manual Schedule</strong></div>
-                 {schedule.length > 0 && (
-                    <table className="preview-table">
-                      <thead>
-                        <tr>
-                          <th>Time (h)</th>
-                          <th>Dose (mg)</th>
-                          {rxRoute==='iv_infusion' && <th>Tinf (h)</th>}
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {schedule.map((row,i)=>(
-                          <tr key={i}>
-                            <td><input type="number" value={row.time} onChange={e=>updateDoseRow(i,"time",parseFloat(e.target.value))} style={{width:100}}/></td>
-                            <td><input type="number" value={row.dose} onChange={e=>updateDoseRow(i,"dose",parseFloat(e.target.value))} style={{width:100}}/></td>
-                            {rxRoute==='iv_infusion' && (
-                              <td><input type="number" value={row.Tinf ?? Tinf} onChange={e=>updateDoseRow(i,"Tinf",parseFloat(e.target.value))} style={{width:100}}/></td>
-                            )}
-                            <td className="cell-actions">
-                              <button className="btn-secondary btn-sm" onClick={()=>removeDoseRow(i)} type="button">
-                                Remove
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                  <div className="actions-row">
-                    <button type="button" className="btn-ghost" onClick={addDoseRow}>Add Dose Row</button>
-                    <button onClick={runSim} disabled={simErrors.length > 0}>Simulate</button>
-                  </div>
-                </>
-              )}
                 </>
               )}
 

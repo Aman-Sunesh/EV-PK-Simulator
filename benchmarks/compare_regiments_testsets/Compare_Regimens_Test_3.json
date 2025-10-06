@@ -1,0 +1,53 @@
+[
+  {
+    "label": "1c • IV bolus — 100 mg q8h",
+    "model": "1c",
+    "route": "iv_bolus",
+    "params": { "Vd": 40, "kel": 0.2 },
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg": 100 }
+  },
+  {
+    "label": "1c • IV infusion (1 h) — 100 mg q8h",
+    "model": "1c",
+    "route": "iv_infusion",
+    "params": { "Vd": 40, "kel": 0.2 },
+    "Tinf": 1.0,
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg": 100 }
+  },
+  {
+    "label": "1c • Oral — F=0.8, ka=0.8 — 100 mg q8h",
+    "model": "1c",
+    "route": "oral",
+    "params": { "Vd": 40, "kel": 0.2, "F": 0.8, "ka": 0.8 },
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg": 100 }
+  },
+  {
+    "label": "2c • IV bolus — 100 mg q8h (macro)",
+    "model": "2c",
+    "route": "iv_bolus",
+    "params": { "A": 0.7, "alpha": 1.0, "B": 0.3, "beta": 0.1 },
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg": 100 }
+  },
+  {
+    "label": "2c • IV infusion (1 h) — 100 mg q8h (micro)",
+    "model": "2c",
+    "route": "iv_infusion",
+    "params": { "k10": 0.15, "k12": 0.25, "k21": 0.15, "V1": 10 },
+    "Tinf": 1.0,
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg": 100 }
+  },
+  {
+    "label": "3c • SC — F=0.9, ka=0.30 — 2 mg/kg q8h (70 kg, macro)",
+    "model": "3c",
+    "route": "sc",
+    "params": { "A": 0.55, "alpha": 0.9, "B": 0.35, "beta": 0.2, "C": 0.10, "gamma": 0.05, "F": 0.9, "ka": 0.30 },
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg_per_kg": 2 },
+    "weight_kg": 70
+  }
+]

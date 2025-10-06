@@ -1588,8 +1588,8 @@ async def simulate_pk(payload: dict = Body(...)):
     try:
         # priority: program > dosing > repeat (legacy)
         if program:
-            # Build dosing from program
-            program_dosing = expand_program(program, route, params.get("Tinf"))
+            # Build dosing from program (mirror the _sim() behavior)
+            program_dosing = expand_program(program, default_Tinf=params.get("Tinf"))
 
             # normalize in case expand_program accidentally returns (dosing_list,)
             if isinstance(program_dosing, tuple) and len(program_dosing) == 1 and isinstance(program_dosing[0], list):
@@ -1771,13 +1771,14 @@ def _run_what_if(payload: dict) -> Dict:
                 raise HTTPException(status_code=400, detail="Optimizer requires Vd>0 and kel>0 for 1c")
             dose_mg = target * (1.0 - np.exp(-kel * tau)) * Vd
 
-    repeat = {
-        "start": start,
-        "tau": tau,
-        "count": count,
-        "dose": dose_mg,
-        **({"Tinf": Tinf} if route in ("iv_infusion","oral","sc") and Tinf > 0 else {})
-    }
+    kind = (payload.get("input_mode") or payload.get("repeat_kind") 
+            or ("infusion" if Tinf and Tinf>0 else "bolus")).lower()
+    repeat = {"start": start, "tau": tau, "count": count, "dose": dose_mg}
+    
+    if kind == "infusion":
+        if not (Tinf and Tinf > 0):
+            raise HTTPException(status_code=400, detail="Tinf>0 required for infusion repeat")
+        repeat["Tinf"] = Tinf
 
     # simulate
     if model == "1c":
@@ -1829,7 +1830,7 @@ def _sim(model: str, route: str, params: Dict, dosing, repeat, program, t_end: f
     """
     # Expand high-level program → dosing if provided
     if program:
-        program_dosing = expand_program(program, route, params.get("Tinf"))
+        program_dosing = expand_program(program, default_Tinf=params.get("Tinf"))
         if isinstance(program_dosing, tuple) and len(program_dosing) == 1 and isinstance(program_dosing[0], list):
             dosing = program_dosing[0]
         else:

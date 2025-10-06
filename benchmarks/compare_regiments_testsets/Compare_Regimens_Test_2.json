@@ -1,0 +1,34 @@
+[
+  {
+    "label": "IV bolus — 100 mg q8h",
+    "model": "1c",
+    "route": "iv_bolus",
+    "params": { "Vd": 40, "kel": 0.2 },
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg": 100 }
+  },
+  {
+    "label": "IV infusion (1 h) — 100 mg q8h",
+    "model": "1c",
+    "route": "iv_infusion",
+    "params": { "Vd": 40, "kel": 0.2, "Tinf": 1.0 },
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg": 100 }
+  },
+  {
+    "label": "Oral — F=0.8, ka=0.8, 100 mg q8h",
+    "model": "1c",
+    "route": "oral",
+    "params": { "Vd": 40, "kel": 0.2, "F": 0.8, "ka": 0.8 },
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg": 100 }
+  },
+  {
+    "label": "SC — F=0.9, ka=0.25, 100 mg q8h",
+    "model": "1c",
+    "route": "sc",
+    "params": { "Vd": 40, "kel": 0.2, "F": 0.9, "ka": 0.25 },
+    "tau": 8, "count": 6, "start": 0, "t_end": 48, "dt": 0.1,
+    "dose_spec": { "dose_mg": 100 }
+  }
+]

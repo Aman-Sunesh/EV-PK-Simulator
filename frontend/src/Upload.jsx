@@ -89,7 +89,19 @@ export default function Upload() {
         dose: Number(effDose) || 100,
         Tinf: Number(Tinf) || 1
       }]);
-    } else {
+    } else if (rxRoute === "oral") {
+      setProgram(p => [...p, {
+        type: "oral",
+        time: start,
+        dose: Number(effDose) || 100
+      }]);
+    } else if (rxRoute === "sc") {
+      setProgram(p => [...p, {
+        type: "sc",
+        time: start,
+        dose: Number(effDose) || 100
+      }]);
+    } else { // iv_bolus (default)
       setProgram(p => [...p, {
         type: "bolus",
         time: start,
@@ -100,7 +112,12 @@ export default function Upload() {
   // Add a repeat dose step; uses pattern = 'infusion' only for IV infusion route.
   function addRepeatBolusStep() {
     const effDose = useMgPerKg ? repeatDose * weightKg : repeatDose; // mg
-    const pat = (rxRoute === "iv_infusion") ? "infusion" : "bolus"; // oral/sc are bolus events
+    const pat =
+      rxRoute === "iv_infusion" ? "infusion" :
+      rxRoute === "oral"        ? "oral"     :
+      rxRoute === "sc"          ? "sc"       :
+                                  "bolus";
+    
     setProgram(p => [...p, {
       type: "repeat",
       pattern: pat,
@@ -437,6 +454,19 @@ const onDrop = useCallback(async (files) => {
       setLoadingMessage("");
     }
   };
+
+  // Clear plots: reset PK and PD plot state (and sweep any stray SVGs just in case)
+  const clearPlots = () => {
+    setSim(null);
+    setPdResults(null);
+    // Best-effort DOM sweep (safe even if React also unmounts)
+    try {
+      document.querySelectorAll('.pk-chart, .pd-chart').forEach(el => el.remove());
+      document.querySelectorAll('#plot-area, #chartContainer, #plots, .results, #results')
+        .forEach(el => { while (el.firstChild) el.removeChild(el.firstChild); });
+    } catch {}
+  };
+
 
   // If using fit params, auto-fill Vd/kel when fit results arrive
   useEffect(() => {
@@ -1804,6 +1834,13 @@ const onDrop = useCallback(async (files) => {
                 >
                   Run PD Analysis
                 </button>
+                <button
+                  onClick={clearPlots}
+                  className="btn-ghost"
+                  title="Clear plots"
+                >
+                  Clear plots
+                </button>
               </div>
             </div>
           )}
@@ -2070,7 +2107,7 @@ const onDrop = useCallback(async (files) => {
 
           <div className="note">
             {mode === "analyze"
-              ? "Analyze: upload a dataset and fit parameters. Advanced seed guesses are optional starting values."
+              ? "Analyze: upload a dataset and fit parameters."
               : "Simulate: pick a route (Route), define the regimen (Dosing), or explore sliders (What-If). Then click Simulate."}
           </div>
 
@@ -2410,6 +2447,14 @@ const onDrop = useCallback(async (files) => {
                 <button className={simTab==='route'?'tab active':'tab'} onClick={()=>setSimTab('route')}>Route</button>
                 <button className={simTab==='dosing'?'tab active':'tab'} onClick={()=>setSimTab('dosing')}>Dosing</button>
                 <div style={{flex:1}} />
+                <button
+                  onClick={clearPlots}
+                  className="btn-ghost"
+                  title="Clear plots"
+                  disabled={!sim && !pdResults}
+                >
+                  Clear plots
+                </button>
                 <button onClick={runSim} disabled={simErrors.length > 0}>Simulate</button>
               </div>
 

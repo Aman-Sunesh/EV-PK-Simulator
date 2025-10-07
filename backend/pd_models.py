@@ -28,13 +28,20 @@ def bacteria_cfu_dynamics(t, CFU0, C_t, k_max, EC50, hill=1.0, k_grow=0.0):
     k_grow: bacterial growth rate (optional)
     Returns: CFU array
     """
-    dt = np.diff(t, prepend=t[0])
-    CFU = np.zeros_like(t)
+    t = np.asarray(t)
+    C_t = np.asarray(C_t)
+
+    CFU = np.zeros_like(t, dtype=float)
     CFU[0] = CFU0
+
+    # Loop over time steps to integrate CFU (Euler method)
     for i in range(1, len(t)):
-        k_kill = k_kill_conc(C_t[i-1], k_max, EC50, hill)
-        dCFU = (k_grow * CFU[i-1] - k_kill * CFU[i-1]) * dt[i]
-        CFU[i] = max(CFU[i-1] + dCFU, 0)
+        dt = t[i] - t[i - 1]
+        C = C_t[i - 1]
+        kill_rate = k_kill_conc(C, k_max, EC50, hill)
+        net_rate = k_grow - kill_rate
+        CFU[i] = CFU[i - 1] * np.exp(net_rate * dt)
+
     return CFU
 
 def hill_emax(C, Emax, EC50, hill=1.0, Emin=0.0):
